@@ -1,0 +1,11 @@
+apiVersion: snapshot.storage.k8s.io/v1beta1
+kind: VolumeSnapshotClass
+metadata:
+  name: synology-snapshotclass
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+driver: csi.san.synology.com
+deletionPolicy: Delete
+# parameters:
+#   description: 'Kubernetes CSI'
+#   is_locked: 'false'

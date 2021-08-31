@@ -1,0 +1,139 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: csi-node-sa
+  namespace: synology-csi
+
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: synology-csi-node-role
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "update"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments"]
+    verbs: ["get", "list", "watch", "update"]
+
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: synology-csi-node-role
+  namespace: synology-csi
+subjects:
+  - kind: ServiceAccount
+    name: csi-node-sa
+    namespace: synology-csi
+roleRef:
+  kind: ClusterRole
+  name: synology-csi-node-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+kind: DaemonSet
+apiVersion: apps/v1
+metadata:
+  name: synology-csi-node
+  namespace: synology-csi
+spec:
+  selector:
+    matchLabels:
+      app: synology-csi-node
+  template:
+    metadata:
+      labels:
+        app: synology-csi-node
+    spec:
+      serviceAccount: csi-node-sa
+      hostNetwork: true
+      containers:
+        - name: csi-driver-registrar
+          securityContext:
+            privileged: true
+          imagePullPolicy: Always
+          image: quay.io/k8scsi/csi-node-driver-registrar:v1.2.0
+          args:
+            - --v=5
+            - --csi-address=$(ADDRESS)                         # the csi socket path inside the pod
+            - --kubelet-registration-path=$(REGISTRATION_PATH) # the csi socket path on the host node
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+            - name: REGISTRATION_PATH
+              value: /var/lib/kubelet/plugins/csi.san.synology.com/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+        - name: csi-plugin
+          securityContext:
+            privileged: true
+          imagePullPolicy: IfNotPresent
+          image: synology/synology-csi:v1.0.0
+          args:
+            - --nodeid=$(KUBE_NODE_NAME)
+            - --endpoint=$(CSI_ENDPOINT)
+            - --client-info
+            - /etc/synology/client-info.yml
+            - --log-level=info
+          env:
+            - name: CSI_ENDPOINT
+              value: unix://csi/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: "Bidirectional"
+            - name: plugin-dir
+              mountPath: /csi
+            - name: client-info
+              mountPath: /etc/synology
+              readOnly: true
+            - name: host-root
+              mountPath: /host
+            - name: device-dir
+              mountPath: /dev
+      volumes:
+        - name: kubelet-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/csi.san.synology.com/
+            type: DirectoryOrCreate
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+        - name: client-info
+          secret:
+            secretName: client-info-secret
+        - name: host-root
+          hostPath:
+            path: /
+            type: Directory
+        - name: device-dir
+          hostPath:
+            path: /dev
+            type: Directory
