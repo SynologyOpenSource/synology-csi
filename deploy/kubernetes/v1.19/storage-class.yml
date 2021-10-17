@@ -11,16 +11,8 @@ provisioner: csi.san.synology.com
 #   dsm: '1.1.1.1'
 #   location: '/volume1'
 #   fsType: 'ext4'
+parameters:
+  fsType: ext4
+  location: /volume1
 reclaimPolicy: Retain
 allowVolumeExpansion: true
-
----
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  annotations:
-    storageclass.kubernetes.io/is-default-class: "false"
-  name: local-path
-provisioner: rancher.io/local-path
-reclaimPolicy: Delete
-volumeBindingMode: WaitForFirstConsumer
