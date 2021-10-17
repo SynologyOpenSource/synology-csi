@@ -1,3 +1,4 @@
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -56,14 +57,14 @@ spec:
       labels:
         app: synology-csi-node
     spec:
-      serviceAccount: csi-node-sa
+      serviceAccountName: csi-node-sa
       hostNetwork: true
       containers:
         - name: csi-driver-registrar
           securityContext:
             privileged: true
           imagePullPolicy: Always
-          image: quay.io/k8scsi/csi-node-driver-registrar:v1.2.0
+          image: k8s.gcr.io/sig-storage/csi-node-driver-registrar:v2.3.0
           args:
             - --v=5
             - --csi-address=$(ADDRESS)                         # the csi socket path inside the pod

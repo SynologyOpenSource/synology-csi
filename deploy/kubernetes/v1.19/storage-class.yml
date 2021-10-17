@@ -1,9 +1,10 @@
+---
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
   name: synology-iscsi-storage
-  # annotations:
-  #   storageclass.kubernetes.io/is-default-class: "true"
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
 provisioner: csi.san.synology.com
 # if all params are empty, synology CSI will choose an available location to create volume
 # parameters:
@@ -12,3 +13,14 @@ provisioner: csi.san.synology.com
 #   fsType: 'ext4'
 reclaimPolicy: Retain
 allowVolumeExpansion: true
+
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+  name: local-path
+provisioner: rancher.io/local-path
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer

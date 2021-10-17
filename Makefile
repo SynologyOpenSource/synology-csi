@@ -6,7 +6,10 @@ IMAGE_VERSION=v1.0.0
 IMAGE_TAG=$(REGISTRY_NAME)/$(IMAGE_NAME):$(IMAGE_VERSION)
 
 # For now, only build linux/amd64 platform
-GOARCH?=amd64
+uname_m := $(shell uname -m)
+INCARCH.x86_64 := amd64
+INCARCH.aarch64 := arm64
+GOARCH += $(INCARCH.$(uname_m))
 BUILD_ENV=CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH)
 BUILD_FLAGS="-extldflags \"-static\""
 
@@ -29,4 +32,3 @@ test:
 	go test -v ./test/...
 clean:
 	-rm -rf ./bin
-

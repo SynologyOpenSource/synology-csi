@@ -1,9 +1,8 @@
-#!/bin/bash
+#!/usr/bin/env bash
 plugin_name="csi.san.synology.com"
 deploy_k8s_version="v1.19"
 
-SCRIPT_PATH="$(realpath "$0")"
-SOURCE_PATH="$(realpath "$(dirname "${SCRIPT_PATH}")"/../)"
+SOURCE_PATH="$(cd "$(dirname "$0")/.." && pwd -P)"
 config_file="${SOURCE_PATH}/config/client-info.yml"
 plugin_dir="/var/lib/kubelet/plugins/$plugin_name"
 
@@ -19,10 +18,6 @@ csi_install(){
 
     kubectl create ns synology-csi
     kubectl create secret -n synology-csi generic client-info-secret --from-file="$config_file"
-
-    if [ ! -d "$plugin_dir" ]; then
-        mkdir -p $plugin_dir
-    fi
 
     kubectl apply -f "$SOURCE_PATH"/deploy/kubernetes/$deploy_k8s_version
 

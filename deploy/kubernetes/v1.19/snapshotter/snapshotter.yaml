@@ -1,3 +1,4 @@
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -64,7 +65,7 @@ spec:
             capabilities:
               add: ["SYS_ADMIN"]
             allowPrivilegeEscalation: true
-          image: quay.io/k8scsi/csi-snapshotter:v3.0.3
+          image: k8s.gcr.io/sig-storage/csi-snapshotter:v4.2.1
           args:
             - --v=5
             - --csi-address=$(ADDRESS)
