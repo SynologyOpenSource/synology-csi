@@ -1,0 +1,191 @@
+# Default values for synology-csi.
+
+image:
+  repository: synology/synology-csi
+  pullPolicy: Always
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+
+
+sidecars:
+  provisioner:
+    env: []
+    image:
+      pullPolicy: Always
+      repository: quay.io/k8scsi/csi-provisioner
+      tag: "v1.6.0"
+    logLevel: 5
+    resources: {}
+  attacher:
+    env: []
+    image:
+      pullPolicy: Always
+      repository: quay.io/k8scsi/csi-attacher
+      tag: "v2.1.0"
+    logLevel: 5
+    resources: {}
+  snapshotter:
+    env: []
+    image:
+      pullPolicy: Always
+      repository: quay.io/k8scsi/csi-snapshotter
+      tag: "v3.0.3"
+    logLevel: 5
+    resources: {}
+  resizer:
+    env: []
+    image:
+      pullPolicy: Always
+      repository: quay.io/k8scsi/csi-resizer
+      tag: "v0.5.0"
+    logLevel: 5
+    resources: {}
+  nodeDriverRegistrar:
+    env: []
+    image:
+      pullPolicy: Always
+      repository: quay.io/k8scsi/csi-node-driver-registrar
+      tag: "v1.2.0"
+    logLevel: 5
+    resources: {}
+
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+controller:
+  replicaCount: 1
+  serviceAccount:
+    # Specifies whether a service account should be created
+    create: true
+    # Annotations to add to the service account
+    annotations: {}
+    # The name of the service account to use.
+    # If not set and create is true, a name is generated using the fullname template
+    name: ""
+
+  logLevel: info
+
+  podAnnotations: {}
+
+  securityContext: {}
+    # privileged: true
+    # capabilities:
+    #   add: ["SYS_ADMIN"]
+    # allowPrivilegeEscalation: true
+
+  resources: {}
+    # We usually recommend not to specify default resources and to leave this as a conscious
+    # choice for the user. This also increases chances charts run on environments with little
+    # resources, such as Minikube. If you do want to specify resources, uncomment the following
+    # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+    # limits:
+    #   cpu: 100m
+    #   memory: 128Mi
+    # requests:
+    #   cpu: 100m
+    #   memory: 128Mi
+
+
+  nodeSelector: {}
+
+  tolerations: []
+
+  affinity: {}
+
+
+node:
+  serviceAccount:
+    # Specifies whether a service account should be created
+    create: true
+    # Annotations to add to the service account
+    annotations: {}
+    # The name of the service account to use.
+    # If not set and create is true, a name is generated using the fullname template
+    name: ""
+
+
+  kubeletPath: /var/lib/kubelet
+  logLevel: info
+
+  podAnnotations: {}
+
+  securityContext:
+    privileged: true
+    capabilities:
+      add: ["SYS_ADMIN"]
+    allowPrivilegeEscalation: true
+
+  resources: {}
+    # We usually recommend not to specify default resources and to leave this as a conscious
+    # choice for the user. This also increases chances charts run on environments with little
+    # resources, such as Minikube. If you do want to specify resources, uncomment the following
+    # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+    # limits:
+    #   cpu: 100m
+    #   memory: 128Mi
+    # requests:
+    #   cpu: 100m
+    #   memory: 128Mi
+
+
+  nodeSelector: {}
+
+  tolerations: []
+
+  affinity: {}
+
+snapshotter:
+  enabled: false
+
+  serviceAccount:
+    # Specifies whether a service account should be created
+    create: true
+    # Annotations to add to the service account
+    annotations: {}
+    # The name of the service account to use.
+    # If not set and create is true, a name is generated using the fullname template
+    name: ""
+
+  logLevel: info
+  podAnnotations: {}
+
+  securityContext: {}
+    # privileged: true
+    # capabilities:
+    #   add: ["SYS_ADMIN"]
+    # allowPrivilegeEscalation: true
+
+clients: []
+  # - host: 192.168.1.1
+  #   port: 5000
+  #   https: false
+  #   username: <username>
+  #   password: <password>
+  # - host: 192.168.1.2
+  #   port: 5001
+  #   https: true
+  #   username: <username>
+  #   password: <password>
+
+storageClasses: []
+  # - name: synostorage
+  #   annotations:
+  #     storageclass.kubernetes.io/is-default-class: "false"
+  #   # if all params are empty, synology CSI will choose an available location to create volume
+  #   parameters:
+  #     fsType: 'ext4'
+  #     dsm: '192.168.1.1'
+  #     location: '/volume1'
+  #   reclaimPolicy: Retain
+  #   allowVolumeExpansion: true
+
+volumeSnapshotClasses: []
+  # - name: synology-snapshotclass
+  #   annotations:
+  #     storageclass.kubernetes.io/is-default-class: "false"
+  #   parameters:
+  #     description: 'Kubernetes CSI'
+  #     is_locked: 'false'
+  #   deletionPolicy: Delete

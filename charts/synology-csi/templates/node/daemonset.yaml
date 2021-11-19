@@ -1,0 +1,114 @@
+kind: DaemonSet
+apiVersion: apps/v1
+metadata:
+  name: {{ include "synology-csi.node.fullname" . }}
+  labels:
+    {{- include "synology-csi.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app: synology-csi-node
+      {{- include "synology-csi.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/client-info-secret.yaml") . | sha256sum }}
+        {{- with .Values.node.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        app: synology-csi-node
+        {{- include "synology-csi.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "synology-csi.node.serviceAccountName" . }}
+      hostNetwork: true
+      containers:
+        - name: csi-driver-registrar
+          securityContext:
+            {{- toYaml .Values.node.securityContext | nindent 12 }}
+          imagePullPolicy: {{ default .Values.image.pullPolicy .Values.sidecars.nodeDriverRegistrar.image.pullPolicy }}
+          image: {{ .Values.sidecars.nodeDriverRegistrar.image.repository }}:{{ .Values.sidecars.nodeDriverRegistrar.image.tag }}
+          args:
+            - --v={{ .Values.sidecars.nodeDriverRegistrar.logLevel }}
+            - --csi-address=$(ADDRESS)                         # the csi socket path inside the pod
+            - --kubelet-registration-path=$(REGISTRATION_PATH) # the csi socket path on the host node
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+            - name: REGISTRATION_PATH
+              value: /var/lib/kubelet/plugins/csi.san.synology.com/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            {{- with .Values.sidecars.nodeDriverRegistrar.env }}
+              {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+          {{- with default .Values.node.resources .Values.sidecars.nodeDriverRegistrar.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        - name: csi-plugin
+          securityContext:
+            {{- toYaml .Values.node.securityContext | nindent 12 }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+          args:
+            - --nodeid=$(KUBE_NODE_NAME)
+            - --endpoint=$(CSI_ENDPOINT)
+            - --client-info
+            - /etc/synology/client-info.yml
+            - --log-level={{ .Values.node.logLevel }}
+          env:
+            - name: CSI_ENDPOINT
+              value: unix://csi/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: "Bidirectional"
+            - name: plugin-dir
+              mountPath: /csi
+            - name: client-info
+              mountPath: /etc/synology
+              readOnly: true
+            - name: host-root
+              mountPath: /host
+            - name: device-dir
+              mountPath: /dev
+          {{- with .Values.node.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: kubelet-dir
+          hostPath:
+            path: {{ trimSuffix "/" .Values.node.kubeletPath }}
+            type: Directory
+        - name: plugin-dir
+          hostPath:
+            path: {{ trimSuffix "/" .Values.node.kubeletPath }}/plugins/csi.san.synology.com/
+            type: DirectoryOrCreate
+        - name: registration-dir
+          hostPath:
+            path: {{ trimSuffix "/" .Values.node.kubeletPath }}/plugins_registry
+            type: Directory
+        - name: client-info
+          secret:
+            secretName: {{ include "synology-csi.fullname" . }}-client-info
+        - name: host-root
+          hostPath:
+            path: /
+            type: Directory
+        - name: device-dir
+          hostPath:
+            path: /dev
+            type: Directory

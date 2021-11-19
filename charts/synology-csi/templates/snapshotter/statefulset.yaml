@@ -1,0 +1,72 @@
+{{- if .Values.snapshotter.enabled }}
+kind: StatefulSet
+apiVersion: apps/v1
+metadata:
+  name: {{ include "synology-csi.snapshotter.fullname" . }}
+  labels:
+    {{- include "synology-csi.labels" . | nindent 4 }}
+spec:
+  serviceName: "synology-csi-snapshotter"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: synology-csi-snapshotter
+      {{- include "synology-csi.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/client-info-secret.yaml") . | sha256sum }}
+        {{- with .Values.snapshotter.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        app: synology-csi-snapshotter
+        {{- include "synology-csi.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "synology-csi.snapshotter.serviceAccountName" . }}
+      hostNetwork: true
+      containers:
+        - name: csi-snapshotter
+          securityContext:
+            {{- toYaml .Values.snapshotter.securityContext | nindent 12 }}
+          image: {{ .Values.sidecars.snapshotter.image.repository }}:{{ .Values.sidecars.snapshotter.image.tag }}
+          args:
+            - --v={{ .Values.sidecars.snapshotter.logLevel }}
+            - --csi-address=$(ADDRESS)
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+            {{- with .Values.sidecars.snapshotter.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          imagePullPolicy: {{ default .Values.image.pullPolicy .Values.sidecars.snapshotter.image.pullPolicy }}
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+        - name: csi-plugin
+          securityContext:
+            {{- toYaml .Values.snapshotter.securityContext | nindent 12 }}
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+          args:
+            - --nodeid=NotUsed
+            - --endpoint=$(CSI_ENDPOINT)
+            - --client-info
+            - /etc/synology/client-info.yml
+            - --log-level={{ .Values.snapshotter.logLevel }}
+          env:
+            - name: CSI_ENDPOINT
+              value: unix:///var/lib/csi/sockets/pluginproxy/csi.sock
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+            - name: client-info
+              mountPath: /etc/synology
+              readOnly: true
+      volumes:
+        - name: socket-dir
+          emptyDir: {}
+        - name: client-info
+          secret:
+            secretName: {{ include "synology-csi.fullname" . }}-client-info
+{{- end }}
