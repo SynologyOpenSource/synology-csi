@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -34,8 +33,8 @@ import (
 )
 
 type nodeServer struct {
-	Driver *Driver
-	Mounter *mount.SafeFormatAndMount
+	Driver     *Driver
+	Mounter    *mount.SafeFormatAndMount
 	dsmService interfaces.IDsmService
 	Initiator  *initiatorDriver
 }
@@ -122,7 +121,7 @@ func createTargetMountPath(mounter mount.Interface, mountPath string, isBlock bo
 }
 
 func (ns *nodeServer) loginTarget(volumeId string) error {
-	k8sVolume := ns.dsmService.GetVolume(volumeId);
+	k8sVolume := ns.dsmService.GetVolume(volumeId)
 
 	if k8sVolume == nil {
 		return status.Error(codes.NotFound, fmt.Sprintf("Volume[%s] is not found", volumeId))
@@ -152,7 +151,7 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 
 	if volumeId == "" || stagingTargetPath == "" || volumeCapability == nil {
 		return nil, status.Error(codes.InvalidArgument,
-		 "InvalidArgument: Please check volume ID, staging target path and volume capability.")
+			"InvalidArgument: Please check volume ID, staging target path and volume capability.")
 	}
 
 	// if block mode, skip mount
@@ -190,12 +189,11 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 }
 
 func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
-	if req.GetVolumeId() == "" { // Useless, just for sanity check
+	volumeID, stagingTargetPath := req.GetVolumeId(), req.GetStagingTargetPath()
+
+	if volumeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
 	}
-
-	stagingTargetPath := req.GetStagingTargetPath()
-
 	if stagingTargetPath == "" {
 		return nil, status.Error(codes.InvalidArgument, "Target path missing in request")
 	}
@@ -210,6 +208,8 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	}
+
+	ns.logoutTarget(volumeID)
 
 	return &csi.NodeUnstageVolumeResponse{}, nil
 }
@@ -260,16 +260,17 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 }
 
 func (ns *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
-	volumeId, targetPath := req.GetVolumeId(), req.GetTargetPath()
-	if volumeId == "" {
+	if req.GetVolumeId() == "" { // Not needed, but still a mandatory field
 		return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
 	}
+
+	targetPath := req.GetTargetPath()
 	if targetPath == "" {
 		return nil, status.Error(codes.InvalidArgument, "Target path missing in request")
 	}
 
 	if _, err := os.Stat(targetPath); err != nil {
-		if os.IsNotExist(err){
+		if os.IsNotExist(err) {
 			return &csi.NodeUnpublishVolumeResponse{}, nil
 		}
 		return nil, status.Errorf(codes.Internal, err.Error())
@@ -285,34 +286,12 @@ func (ns *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 		return &csi.NodeUnpublishVolumeResponse{}, nil
 	}
 
-	needToLogout := true
-
-	list, err := ns.Mounter.Interface.GetMountRefs(targetPath)
-
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-
-	for _, path := range list {
-		filePrefix := "/var/lib/kubelet/pods/"
-		blkPrefix := "/var/lib/kubelet/plugins/kubernetes.io/csi/volumeDevices/publish/"
-
-		if strings.HasPrefix(path, filePrefix) || strings.HasPrefix(path, blkPrefix) {
-			needToLogout = false
-			break
-		}
-	}
-
 	if err := ns.Mounter.Interface.Unmount(targetPath); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	if err := os.Remove(targetPath); err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to remove target path.")
-	}
-
-	if needToLogout {
-		ns.logoutTarget(volumeId)
 	}
 
 	return &csi.NodeUnpublishVolumeResponse{}, nil
