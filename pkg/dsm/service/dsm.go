@@ -394,6 +394,18 @@ func (service *DsmService) CreateVolume(spec *models.CreateK8sVolumeSpec) (webap
 				continue
 			}
 
+			// found source by snapshot id, check allowable
+			if spec.DsmIp != "" && spec.DsmIp != dsm.Ip {
+				msg := fmt.Sprintf("The source PVC and destination PVCs must be on the same DSM for cloning from snapshots. Source is on %s, but new PVC is on %s",
+					dsm.Ip, spec.DsmIp)
+				return webapi.LunInfo{}, "", status.Errorf(codes.InvalidArgument, msg)
+			}
+			if spec.Location != "" && spec.Location != snapshotInfo.RootPath {
+				msg := fmt.Sprintf("The source PVC and destination PVCs must be on the same location for cloning from snapshots. Source is on %s, but new PVC is on %s",
+					snapshotInfo.RootPath, spec.Location)
+				return webapi.LunInfo{}, "", status.Errorf(codes.InvalidArgument, msg)
+			}
+
 			lunInfo, err := service.createVolumeBySnapshot(dsm, spec, snapshotInfo)
 			return lunInfo, dsm.Ip, err
 		}

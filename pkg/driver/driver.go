@@ -24,7 +24,7 @@ import (
 
 const (
 	DriverName = "csi.san.synology.com" // CSI dirver name
-	DriverVersion = "1.0.0"
+	DriverVersion = "1.0.1"
 )
 
 type IDriver interface {

@@ -2,12 +2,15 @@
 
 REGISTRY_NAME=synology
 IMAGE_NAME=synology-csi
-IMAGE_VERSION=v1.0.0
+IMAGE_VERSION=v1.0.1
 IMAGE_TAG=$(REGISTRY_NAME)/$(IMAGE_NAME):$(IMAGE_VERSION)
 
 # For now, only build linux/amd64 platform
-GOARCH?=amd64
-BUILD_ENV=CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH)
+ifeq ($(GOARCH),)
+GOARCH:=amd64
+endif
+GOARM?=""
+BUILD_ENV=CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) GOARM=$(GOARM)
 BUILD_FLAGS="-extldflags \"-static\""
 
 .PHONY: all clean synology-csi-driver synocli test docker-build
@@ -20,6 +23,9 @@ synology-csi-driver:
 
 docker-build:
 	docker build -f Dockerfile -t $(IMAGE_TAG) .
+
+docker-build-multiarch:
+	docker buildx build -t $(IMAGE_TAG) --platform linux/amd64,linux/arm/v7,linux/arm64 . --push
 
 synocli:
 	@mkdir -p bin

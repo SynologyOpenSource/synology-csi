@@ -6,7 +6,8 @@ The official [Container Storage Interface](https://github.com/container-storage-
 Driver Name: csi.san.synology.com
 | Driver Version | Image                                                                 | Supported K8s Version |
 | -------------- | --------------------------------------------------------------------- | --------------------- |
-| v1.0.0         | [synology-csi:v1.0.0](https://hub.docker.com/r/synology/synology-csi) | 1.19                  |
+| [v1.0.1](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.0.1)         | [synology-csi:v1.0.1](https://hub.docker.com/r/synology/synology-csi) | 1.20+                 |
+| [v1.0.0](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.0.0)         | [synology-csi:v1.0.0](https://hub.docker.com/r/synology/synology-csi) | 1.19                  |
 
 
 
@@ -18,7 +19,7 @@ The Synology CSI driver supports:
 
 ## Installation
 ### Prerequisites
-- Kubernetes versions 1.19
+- Kubernetes versions 1.19 or above
 - Synology NAS running DSM 7.0 or above
 - Go version 1.16 or above is recommended
 - (Optional) Both [Volume Snapshot CRDs](https://github.com/kubernetes-csi/external-snapshotter/tree/v4.0.0/client/config/crd) and the [common snapshot controller](https://github.com/kubernetes-csi/external-snapshotter/tree/v4.0.0/deploy/kubernetes/snapshot-controller) must be installed in your Kubernetes cluster if you want to use the **Snapshot** feature

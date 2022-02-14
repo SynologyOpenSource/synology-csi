@@ -11,9 +11,13 @@ RUN go mod download
 
 COPY Makefile .
 
+ARG TARGETPLATFORM
+
 COPY main.go .
 COPY pkg ./pkg
-RUN make
+RUN env GOARCH=$(echo "$TARGETPLATFORM" | cut -f2 -d/) \
+        GOARM=$(echo "$TARGETPLATFORM" | cut -f3 -d/ | cut -c2-) \
+        make
 
 ############## Final stage ##############
 FROM alpine:latest

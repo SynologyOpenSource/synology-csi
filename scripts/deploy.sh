@@ -1,11 +1,38 @@
 #!/bin/bash
 plugin_name="csi.san.synology.com"
-deploy_k8s_version="v1.19"
+min_support_minor=19
+max_support_minor=20
+deploy_k8s_version="v1".$min_support_minor
 
 SCRIPT_PATH="$(realpath "$0")"
 SOURCE_PATH="$(realpath "$(dirname "${SCRIPT_PATH}")"/../)"
 config_file="${SOURCE_PATH}/config/client-info.yml"
 plugin_dir="/var/lib/kubelet/plugins/$plugin_name"
+
+parse_version(){
+    ver=$(kubectl version --short | grep Server | awk '{print $3}')
+    major=$(echo "${ver##*v}" | cut -d'.' -f1)
+    minor=$(echo "${ver##*v}" | cut -d'.' -f2)
+
+    if [[ "$major" != 1 ]]; then
+        echo "Version not supported: $ver"
+        exit 1
+    fi
+
+    case "$minor" in
+        19|20)
+            deploy_k8s_version="v1".$minor
+            ;;
+        *)
+            if [[ $minor -lt $min_support_minor ]]; then
+                deploy_k8s_version="v1".$min_support_minor
+            else
+                deploy_k8s_version="v1".$max_support_minor
+            fi
+            ;;
+    esac
+    echo "Deploy Version: $deploy_k8s_version"
+}
 
 # 1. Build
 csi_build(){
@@ -16,6 +43,7 @@ csi_build(){
 # 2. Install
 csi_install(){
     echo "==== Creates namespace and secrets, then installs synology-csi ===="
+    parse_version
 
     kubectl create ns synology-csi
     kubectl create secret -n synology-csi generic client-info-secret --from-file="$config_file"

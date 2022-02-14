@@ -58,6 +58,7 @@ type SnapshotInfo struct {
 	Status            string             `json:"status"`
 	TotalSize         int64              `json:"total_size"`
 	CreateTime        int64              `json:"create_time"`
+	RootPath          string             `json:"root_path"`
 }
 
 type LunDevAttrib struct {
