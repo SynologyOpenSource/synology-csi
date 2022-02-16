@@ -85,7 +85,7 @@ spec:
         - name: csi-plugin
           securityContext:
             privileged: true
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           image: synology/synology-csi:v1.0.1
           args:
             - --nodeid=$(KUBE_NODE_NAME)
