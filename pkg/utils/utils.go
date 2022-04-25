@@ -8,7 +8,42 @@ import (
 	"strings"
 )
 
-const UNIT_GB = 1024 * 1024 * 1024
+type AuthType string
+
+const (
+	UNIT_GB = 1024 * 1024 * 1024
+	UNIT_MB = 1024 * 1024
+
+	ProtocolSmb     = "smb"
+	ProtocolIscsi   = "iscsi"
+	ProtocolDefault = ProtocolIscsi
+
+	AuthTypeReadWrite AuthType = "rw"
+	AuthTypeReadOnly  AuthType = "ro"
+	AuthTypeNoAccess  AuthType = "no"
+)
+
+func SliceContains(items []string, s string) bool {
+	for _, item := range items {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+func MBToBytes(size int64) int64 {
+	return size * UNIT_MB
+}
+
+func BytesToMB(size int64) int64 {
+	return size / UNIT_MB
+}
+
+// Ceiling
+func BytesToMBCeil(size int64) int64 {
+	return (size + UNIT_MB - 1) / UNIT_MB
+}
 
 func StringToBoolean(value string) bool {
 	value = strings.ToLower(value)

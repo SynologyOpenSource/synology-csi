@@ -1,2 +1,3 @@
 bin/
 config/client-info.yml
+test/sanity/sanity-test-secret-file.yaml

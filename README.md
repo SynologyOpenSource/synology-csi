@@ -4,10 +4,11 @@ The official [Container Storage Interface](https://github.com/container-storage-
 
 ### Container Images & Kubernetes Compatibility
 Driver Name: csi.san.synology.com
-| Driver Version | Image                                                                 | Supported K8s Version |
-| -------------- | --------------------------------------------------------------------- | --------------------- |
-| [v1.0.1](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.0.1)         | [synology-csi:v1.0.1](https://hub.docker.com/r/synology/synology-csi) | 1.20+                 |
-| [v1.0.0](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.0.0)         | [synology-csi:v1.0.0](https://hub.docker.com/r/synology/synology-csi) | 1.19                  |
+| Driver Version                                                                   | Image                                                                 | Supported K8s Version |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------- |
+| [v1.1.0](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.1.0) | [synology-csi:v1.1.0](https://hub.docker.com/r/synology/synology-csi) | 1.20+                 |
+| [v1.0.1](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.0.1) | [synology-csi:v1.0.1](https://hub.docker.com/r/synology/synology-csi) | 1.20+                 |
+| [v1.0.0](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.0.0) | [synology-csi:v1.0.0](https://hub.docker.com/r/synology/synology-csi) | 1.19                  |
 
 
 
@@ -99,6 +100,7 @@ Create and apply StorageClasses with the properties you want.
 
 1. Create YAML files using the one at `deploy/kubernetes/<k8s version>/storage-class.yml` as the example, whose content is as below:
 
+    **iSCSI Protocol**
     ```
     apiVersion: storage.k8s.io/v1
     kind: StorageClass
@@ -114,18 +116,56 @@ Create and apply StorageClasses with the properties you want.
     reclaimPolicy: Retain
     allowVolumeExpansion: true
     ```
+
+    **SMB/CIFS Protocol**
+
+    Before creating an SMB/CIFS storage class, you must **create a secret** and specify the DSM user whom you want to give permissions to.
+
+    ```
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: cifs-csi-credentials
+      namespace: default
+    type: Opaque
+    stringData:
+      username: <username>  # DSM user account accessing the shared folder
+      password: <password>  # DSM user password accessing the shared folder
+    ```
+
+    After creating the secret, create a storage class and fill the secret for node-stage-secret. This is a **required** step if you're using SMB, or there will be errors when staging volumes.
+
+    ```
+    apiVersion: storage.k8s.io/v1
+    kind: StorageClass
+    metadata:
+      name: synostorage-smb
+    provisioner: csi.san.synology.com
+    parameters:
+      protocol: "smb"
+      dsm: '192.168.1.1'
+      location: '/volume1'
+      csi.storage.k8s.io/node-stage-secret-name: "cifs-csi-credentials"
+      csi.storage.k8s.io/node-stage-secret-namespace: "default"
+    reclaimPolicy: Delete
+    allowVolumeExpansion: true
+    ```
+
 2. Configure the StorageClass properties by assigning the parameters in the table. You can also leave blank if you don’t have a preference:
 
-    | Name       | Type   | Description                                                                                                       | Default |
-    | ---------- | ------ | ----------------------------------------------------------------------------------------------------------------- | ------- |
-    | *dsm*      | string | The IPv4 address of your DSM, which must be included in the `client-info.yml` for the CSI driver to log in to DSM | -       |
-    | *location* | string | The location (/volume1, /volume2, ...) on DSM where the LUN for *PersistentVolume* will be created                | -       |
-    | *fsType*   | string | The formatting file system of the *PersistentVolumes* when you mount them on the pods                             | 'ext4'  |
+    | Name                                             | Type   | Description                                                                                                                                                        | Default | Supported protocols |
+    | ------------------------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- | ------------------- |
+    | *dsm*                                            | string | The IPv4 address of your DSM, which must be included in the `client-info.yml` for the CSI driver to log in to DSM                                                  | -       | iSCSI, SMB          |
+    | *location*                                       | string | The location (/volume1, /volume2, ...) on DSM where the LUN for *PersistentVolume* will be created                                                                 | -       | iSCSI, SMB          |
+    | *fsType*                                         | string | The formatting file system of the *PersistentVolumes* when you mount them on the pods. This parameter only works with iSCSI. For SMB, the fsType is always ‘cifs‘. | 'ext4'  | iSCSI               |
+    | *protocol*                                       | string | The backing storage protocol. Enter ‘iscsi’ to create LUNs or ‘smb‘ to create shared folders on DSM.                                                               | 'iscsi' | iSCSI, SMB          |
+    | *csi.storage.k8s.io/node-stage-secret-name*      | string | The name of node-stage-secret. Required if DSM shared folder is accessed via SMB.                                                                                  | -       | SMB                 |
+    | *csi.storage.k8s.io/node-stage-secret-namespace* | string | The namespace of node-stage-secret. Required if DSM shared folder is accessed via SMB.                                                                             | -       | SMB                 |
 
     **Notice**
 
     - If you leave the parameter *location* blank, the CSI driver will choose a volume on DSM with available storage to create the volumes.
-    - All volumes created by the CSI driver are Thin Provisioned LUNs on DSM. This will allow you to take snapshots of them.
+    - All iSCSI volumes created by the CSI driver are Thin Provisioned LUNs on DSM. This will allow you to take snapshots of them.
 
 3. Apply the YAML files to the Kubernetes cluster.
 
@@ -154,10 +194,10 @@ Create and apply VolumeSnapshotClasses with the properties you want.
 
 2. Configure volume snapshot class properties by assigning the following parameters, all parameters are optional:
 
-    | Name          | Type   | Description                                  | Default |
-    | ------------- | ------ | -------------------------------------------- | ------- |
-    | *description* | string | The description of the snapshot on DSM       | ""      |
-    | *is_locked*   | string | Whether you want to lock the snapshot on DSM | 'false' |
+    | Name          | Type   | Description                                  | Default | Supported protocols |
+    | ------------- | ------ | -------------------------------------------- | ------- | ------------------- |
+    | *description* | string | The description of the snapshot on DSM       | ""      | iSCSI               |
+    | *is_locked*   | string | Whether you want to lock the snapshot on DSM | 'false' | iSCSI, SMB          |
 
 3. Apply the YAML files to the Kubernetes cluster.
 

@@ -19,15 +19,17 @@ package driver
 import (
 	"context"
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"time"
+	"sort"
 	"strconv"
+	"strings"
 
-	"github.com/golang/protobuf/ptypes"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/webapi"
 	"github.com/SynologyOpenSource/synology-csi/pkg/interfaces"
 	"github.com/SynologyOpenSource/synology-csi/pkg/models"
 	"github.com/SynologyOpenSource/synology-csi/pkg/utils"
@@ -118,36 +120,56 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		isThin = utils.StringToBoolean(params["thin_provisioning"])
 	}
 
+	protocol := strings.ToLower(params["protocol"])
+	if protocol == "" {
+		protocol = utils.ProtocolDefault
+	} else if !isProtocolSupport(protocol) {
+		return nil, status.Error(codes.InvalidArgument, "Unsupported volume protocol")
+	}
+
 	spec := &models.CreateK8sVolumeSpec{
 		DsmIp:            params["dsm"],
 		K8sVolumeName:    volName,
-		LunName:          fmt.Sprintf("%s-%s", models.LunPrefix, volName),
+		LunName:          models.GenLunName(volName),
+		ShareName:        models.GenShareName(volName),
 		Location:         params["location"],
 		Size:             sizeInByte,
 		Type:             params["type"],
 		ThinProvisioning: isThin,
-		TargetName:       fmt.Sprintf("%s-%s", models.LunPrefix, volName),
+		TargetName:       fmt.Sprintf("%s-%s", models.TargetPrefix, volName),
 		MultipleSession:  multiSession,
 		SourceSnapshotId: srcSnapshotId,
 		SourceVolumeId:   srcVolumeId,
+		Protocol:         protocol,
 	}
 
-	lunInfo, dsmIp, err := cs.dsmService.CreateVolume(spec)
-	if err != nil {
-		return nil, err
+	// idempotency
+	// Note: an SMB PV may not be tested existed precisely because the share folder name was sliced from k8sVolumeName
+	k8sVolume := cs.dsmService.GetVolumeByName(volName)
+	if k8sVolume == nil {
+		k8sVolume, err = cs.dsmService.CreateVolume(spec)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// already existed
+		log.Debugf("Volume [%s] already exists in [%s], backing name: [%s]", volName, k8sVolume.DsmIp, k8sVolume.Name)
 	}
 
-	if int64(lunInfo.Size) != sizeInByte {
+	if (k8sVolume.Protocol == utils.ProtocolIscsi && k8sVolume.SizeInBytes != sizeInByte) ||
+		(k8sVolume.Protocol == utils.ProtocolSmb && utils.BytesToMB(k8sVolume.SizeInBytes) != utils.BytesToMBCeil(sizeInByte)) {
 		return nil , status.Errorf(codes.AlreadyExists, "Already existing volume name with different capacity")
 	}
 
 	return &csi.CreateVolumeResponse{
 		Volume: &csi.Volume{
-			VolumeId: lunInfo.Uuid,
-			CapacityBytes: int64(lunInfo.Size),
+			VolumeId: k8sVolume.VolumeId,
+			CapacityBytes: k8sVolume.SizeInBytes,
 			ContentSource: volContentSrc,
 			VolumeContext: map[string]string{
-				"dsm": dsmIp,
+				"dsm":      k8sVolume.DsmIp,
+				"protocol": k8sVolume.Protocol,
+				"source":   k8sVolume.Source,
 			},
 		},
 	}, nil
@@ -212,9 +234,11 @@ func (cs *controllerServer) ListVolumes(ctx context.Context, req *csi.ListVolume
 	pagingSkip := ("" != startingToken)
 	infos := cs.dsmService.ListVolumes()
 
+	sort.Sort(models.ByVolumeId(infos))
+
 	var count int32 = 0
 	for _, info := range infos {
-		if info.Lun.Uuid == startingToken {
+		if info.VolumeId == startingToken {
 			pagingSkip = false
 		}
 
@@ -223,18 +247,20 @@ func (cs *controllerServer) ListVolumes(ctx context.Context, req *csi.ListVolume
 		}
 
 		if maxEntries > 0 && count >= maxEntries {
-			nextToken = info.Lun.Uuid
+			nextToken = info.VolumeId
 			break
 		}
 
 		entries = append(entries, &csi.ListVolumesResponse_Entry{
 			Volume: &csi.Volume{
-				VolumeId:      info.Lun.Uuid,
-				CapacityBytes: int64(info.Lun.Size),
+				VolumeId:      info.VolumeId,
+				CapacityBytes: info.SizeInBytes,
 				VolumeContext: map[string]string{
 					"dsm":       info.DsmIp,
 					"lunName":   info.Lun.Name,
 					"targetIqn": info.Target.Iqn,
+					"shareName": info.Share.Name,
+					"protocol":  info.Protocol,
 				},
 			},
 		})
@@ -290,7 +316,7 @@ func (cs *controllerServer) ControllerGetCapabilities(ctx context.Context, req *
 
 func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
 	srcVolId := req.GetSourceVolumeId()
-	snapshotName := req.GetName()
+	snapshotName := req.GetName() // snapshot-XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
 	params := req.GetParameters()
 
 	if srcVolId == "" {
@@ -301,37 +327,28 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 		return nil, status.Error(codes.InvalidArgument, "Snapshot name is empty.")
 	}
 
-	snapshotInfos, err := cs.dsmService.ListAllSnapshots()
-
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to ListAllSnapshots(), err: %v", err))
-	}
-
 	// idempotency
-	for _, snapshotInfo := range snapshotInfos {
-		if snapshotInfo.Name == snapshotName {
-			if snapshotInfo.ParentUuid != srcVolId {
-				return nil, status.Errorf(codes.AlreadyExists, fmt.Sprintf("Snapshot [%s] already exists but volume id is incompatible", snapshotName))
-			}
-
-			createTime, err := ptypes.TimestampProto(time.Unix(snapshotInfo.CreateTime, 0))
-
-			if err != nil {
-				return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to convert create time, err: %v", err))
-			}
-
-			return &csi.CreateSnapshotResponse{
-				Snapshot: &csi.Snapshot{
-					SizeBytes: snapshotInfo.TotalSize,
-					SnapshotId: snapshotInfo.Uuid,
-					SourceVolumeId: snapshotInfo.ParentUuid,
-					CreationTime: createTime,
-					ReadyToUse: (snapshotInfo.Status == "Healthy"),
-				},
-			}, nil
+	orgSnap := cs.dsmService.GetSnapshotByName(snapshotName)
+	if orgSnap != nil {
+		// already existed
+		if orgSnap.ParentUuid != srcVolId {
+			return nil, status.Errorf(codes.AlreadyExists, fmt.Sprintf("Snapshot [%s] already exists but volume id is incompatible", snapshotName))
 		}
+		if orgSnap.CreateTime < 0 {
+			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Bad create time: %v", orgSnap.CreateTime))
+		}
+		return &csi.CreateSnapshotResponse{
+			Snapshot: &csi.Snapshot{
+				SizeBytes: orgSnap.SizeInBytes,
+				SnapshotId: orgSnap.Uuid,
+				SourceVolumeId: orgSnap.ParentUuid,
+				CreationTime: timestamppb.New(time.Unix(orgSnap.CreateTime, 0)),
+				ReadyToUse: (orgSnap.Status == "Healthy"),
+			},
+		}, nil
 	}
 
+	// not exist, going to create a new snapshot
 	spec := &models.CreateK8sVolumeSnapshotSpec{
 		K8sVolumeId:  srcVolId,
 		SnapshotName: snapshotName,
@@ -340,35 +357,19 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 		IsLocked:     utils.StringToBoolean(params["is_locked"]),
 	}
 
-	snapshotId, err := cs.dsmService.CreateSnapshot(spec)
-
+	snapshot, err := cs.dsmService.CreateSnapshot(spec)
 	if err != nil {
-		if err == utils.OutOfFreeSpaceError("") || err == utils.SnapshotReachMaxCountError("") {
-			return nil,status.Errorf(codes.ResourceExhausted, fmt.Sprintf("Failed to CreateSnapshot(%s), err: %v", srcVolId, err))
-		} else {
-			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to CreateSnapshot(%s), err: %v", srcVolId, err))
-		}
-	}
-
-	snapshotInfo, err := cs.dsmService.GetSnapshot(snapshotId)
-
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to GetSnapshot(%s), err: %v", snapshotId, err))
-	}
-
-	createTime, err := ptypes.TimestampProto(time.Unix(snapshotInfo.CreateTime, 0))
-
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to convert create time, err: %v", err))
+		log.Errorf("Failed to CreateSnapshot, snapshotName: %s, srcVolId: %s, err: %v", snapshotName, srcVolId, err)
+		return nil, err
 	}
 
 	return &csi.CreateSnapshotResponse{
 		Snapshot: &csi.Snapshot{
-			SizeBytes: snapshotInfo.TotalSize,
-			SnapshotId: snapshotInfo.Uuid,
-			SourceVolumeId: snapshotInfo.ParentUuid,
-			CreationTime: createTime,
-			ReadyToUse: (snapshotInfo.Status == "Healthy"),
+			SizeBytes: snapshot.SizeInBytes,
+			SnapshotId: snapshot.Uuid,
+			SourceVolumeId: snapshot.ParentUuid,
+			CreationTime: timestamppb.New(time.Unix(snapshot.CreateTime, 0)),
+			ReadyToUse: (snapshot.Status == "Healthy"),
 		},
 	}, nil
 }
@@ -402,22 +403,19 @@ func (cs *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnap
 	}
 
 	pagingSkip := ("" != startingToken)
-	var snapshotInfos []webapi.SnapshotInfo
-	var err error
+	var snapshots []*models.K8sSnapshotRespSpec
 
 	if (srcVolId != "") {
-		snapshotInfos, err = cs.dsmService.ListSnapshots(srcVolId)
+		snapshots = cs.dsmService.ListSnapshots(srcVolId)
 	} else {
-		snapshotInfos, err = cs.dsmService.ListAllSnapshots()
+		snapshots = cs.dsmService.ListAllSnapshots()
 	}
 
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to ListSnapshots(%s), err: %v", srcVolId, err))
-	}
+	sort.Sort(models.BySnapshotAndParentUuid(snapshots))
 
 	var count int32 = 0
-	for _, snapshotInfo := range snapshotInfos {
-		if snapshotInfo.Uuid == startingToken {
+	for _, snapshot := range snapshots {
+		if snapshot.Uuid == startingToken {
 			pagingSkip = false
 		}
 
@@ -425,28 +423,21 @@ func (cs *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnap
 			continue
 		}
 
-		if snapshotId != "" && snapshotInfo.Uuid != snapshotId {
+		if snapshotId != "" && snapshot.Uuid != snapshotId {
 			continue
 		}
 
 		if maxEntries > 0 && count >= maxEntries {
-			nextToken = snapshotInfo.Uuid
+			nextToken = snapshot.Uuid
 			break
 		}
-
-		createTime, err := ptypes.TimestampProto(time.Unix(snapshotInfo.CreateTime, 0))
-
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to convert create time, err: %v", err))
-		}
-
 		entries = append(entries, &csi.ListSnapshotsResponse_Entry{
 			Snapshot: &csi.Snapshot{
-				SizeBytes: snapshotInfo.TotalSize,
-				SnapshotId: snapshotInfo.Uuid,
-				SourceVolumeId: snapshotInfo.ParentUuid,
-				CreationTime: createTime,
-				ReadyToUse: (snapshotInfo.Status == "Healthy"),
+				SizeBytes: snapshot.SizeInBytes,
+				SnapshotId: snapshot.Uuid,
+				SourceVolumeId: snapshot.ParentUuid,
+				CreationTime: timestamppb.New(time.Unix(snapshot.CreateTime, 0)),
+				ReadyToUse: (snapshot.Status == "Healthy"),
 			},
 		})
 
@@ -477,14 +468,14 @@ func (cs *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 			"InvalidArgument: Please check CapacityRange[%v]", capRange)
 	}
 
-	if err := cs.dsmService.ExpandLun(volumeId, sizeInByte); err != nil {
-		return nil, status.Error(codes.Internal,
-			fmt.Sprintf("Failed to expand volume [%s], err: %v", volumeId, err))
+	k8sVolume, err := cs.dsmService.ExpandVolume(volumeId, sizeInByte)
+	if err != nil {
+		return nil, err
 	}
 
 	return &csi.ControllerExpandVolumeResponse{
-		CapacityBytes: sizeInByte,
-		NodeExpansionRequired: true,
+		CapacityBytes: k8sVolume.SizeInBytes,
+		NodeExpansionRequired: (k8sVolume.Protocol == utils.ProtocolIscsi),
 	}, nil
 }
 

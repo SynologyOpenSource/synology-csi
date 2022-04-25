@@ -15,6 +15,7 @@ import (
 
 const (
 	ConfigPath = "./../../config/client-info.yml"
+	SecretsFilePath = "./sanity-test-secret-file.yaml"
 )
 
 func TestSanity(t *testing.T) {
@@ -69,6 +70,15 @@ func TestSanity(t *testing.T) {
 	testConfig.TargetPath = targetPath
 	testConfig.StagingPath = stagingPath
 	testConfig.Address = endpoint
+	testConfig.SecretsFile = SecretsFilePath
+
+	// Set Input parameters for test
+	testConfig.TestVolumeParameters = map[string]string{
+		"protocol": "smb",
+	}
+
+	// testConfig.TestVolumeAccessType = "block" // raw block
+
 	// Run test
 	sanity.Test(t, testConfig)
 }

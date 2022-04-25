@@ -20,11 +20,16 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	log "github.com/sirupsen/logrus"
 	"github.com/SynologyOpenSource/synology-csi/pkg/interfaces"
+	"github.com/SynologyOpenSource/synology-csi/pkg/utils"
 )
 
 const (
 	DriverName = "csi.san.synology.com" // CSI dirver name
-	DriverVersion = "1.0.1"
+	DriverVersion = "1.1.0"
+)
+
+var (
+	supportedProtocolList = []string{utils.ProtocolIscsi, utils.ProtocolSmb}
 )
 
 type IDriver interface {
@@ -73,6 +78,8 @@ func NewControllerAndNodeDriver(nodeID string, endpoint string, dsmService inter
 	d.addNodeServiceCapabilities([]csi.NodeServiceCapability_RPC_Type{
 		csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
 		csi.NodeServiceCapability_RPC_EXPAND_VOLUME,
+		csi.NodeServiceCapability_RPC_VOLUME_MOUNT_GROUP,
+		// csi.NodeServiceCapability_RPC_GET_VOLUME_STATS, //TODO
 	})
 
 	log.Infof("New driver created: name=%s, nodeID=%s, version=%s, endpoint=%s", d.name, d.nodeID, d.version, d.endpoint)
@@ -126,4 +133,8 @@ func (d *Driver) addNodeServiceCapabilities(nsc []csi.NodeServiceCapability_RPC_
 
 func (d *Driver) getVolumeCapabilityAccessModes() []*csi.VolumeCapability_AccessMode { // for debugging
 	return d.vCap
+}
+
+func isProtocolSupport(protocol string) bool {
+	return utils.SliceContains(supportedProtocolList, protocol)
 }

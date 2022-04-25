@@ -2,7 +2,7 @@
 
 REGISTRY_NAME=synology
 IMAGE_NAME=synology-csi
-IMAGE_VERSION=v1.0.1
+IMAGE_VERSION=v1.1.0
 IMAGE_TAG=$(REGISTRY_NAME)/$(IMAGE_NAME):$(IMAGE_VERSION)
 
 # For now, only build linux/amd64 platform
@@ -32,6 +32,7 @@ synocli:
 	$(BUILD_ENV) go build -v -ldflags $(BUILD_FLAGS) -o ./bin/synocli ./synocli
 
 test:
+	go clean -testcache
 	go test -v ./test/...
 clean:
 	-rm -rf ./bin

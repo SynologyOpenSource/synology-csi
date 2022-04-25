@@ -86,7 +86,7 @@ spec:
           securityContext:
             privileged: true
           imagePullPolicy: IfNotPresent
-          image: synology/synology-csi:v1.0.1
+          image: synology/synology-csi:v1.1.0
           args:
             - --nodeid=$(KUBE_NODE_NAME)
             - --endpoint=$(CSI_ENDPOINT)

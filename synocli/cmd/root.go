@@ -16,6 +16,7 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(cmdDsm)
+	rootCmd.AddCommand(cmdShare)
 }
 
 func Execute() {

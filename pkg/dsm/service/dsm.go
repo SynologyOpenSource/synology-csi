@@ -149,11 +149,11 @@ func getLunTypeByInputParams(lunType string, isThin bool, locationFsType string)
 	return "", fmt.Errorf("Unknown volume fs type: %s", locationFsType)
 }
 
-func (service *DsmService) createMappingTarget(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, lunUuid string) error {
+func (service *DsmService) createMappingTarget(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, lunUuid string) (webapi.TargetInfo, error) {
 	dsmInfo, err := dsm.DsmInfoGet()
 
 	if err != nil {
-		return status.Errorf(codes.Internal, fmt.Sprintf("Failed to get DSM[%s] info", dsm.Ip));
+		return webapi.TargetInfo{}, status.Errorf(codes.Internal, fmt.Sprintf("Failed to get DSM[%s] info", dsm.Ip));
 	}
 
 	genTargetIqn := func() string {
@@ -175,35 +175,35 @@ func (service *DsmService) createMappingTarget(dsm *webapi.DSM, spec *models.Cre
 	targetId, err := dsm.TargetCreate(targetSpec)
 
 	if err != nil && !errors.Is(err, utils.AlreadyExistError("")) {
-		return status.Errorf(codes.Internal, fmt.Sprintf("Failed to create target with spec: %v, err: %v", targetSpec, err))
+		return webapi.TargetInfo{}, status.Errorf(codes.Internal, fmt.Sprintf("Failed to create target with spec: %v, err: %v", targetSpec, err))
 	}
 
-	if targetInfo, err := dsm.TargetGet(targetSpec.Name); err != nil {
-		return status.Errorf(codes.Internal, fmt.Sprintf("Failed to get target with spec: %v, err: %v", targetSpec, err))
+	targetInfo, err := dsm.TargetGet(targetSpec.Name)
+	if err != nil {
+		return webapi.TargetInfo{}, status.Errorf(codes.Internal, fmt.Sprintf("Failed to get target with spec: %v, err: %v", targetSpec, err))
 	} else {
 		targetId = strconv.Itoa(targetInfo.TargetId);
 	}
 
 	if spec.MultipleSession == true {
 		if err := dsm.TargetSet(targetId, 0); err != nil {
-			return status.Errorf(codes.Internal, fmt.Sprintf("Failed to set target [%s] max session, err: %v", spec.TargetName, err))
+			return webapi.TargetInfo{}, status.Errorf(codes.Internal, fmt.Sprintf("Failed to set target [%s] max session, err: %v", spec.TargetName, err))
 		}
 	}
 
-	err = dsm.LunMapTarget([]string{targetId}, lunUuid)
-	if err != nil {
-		return status.Errorf(codes.Internal, fmt.Sprintf("Failed to map target [%s] to lun [%s], err: %v", spec.TargetName, lunUuid, err))
+	if err := dsm.LunMapTarget([]string{targetId}, lunUuid); err != nil {
+		return webapi.TargetInfo{}, status.Errorf(codes.Internal, fmt.Sprintf("Failed to map target [%s] to lun [%s], err: %v", spec.TargetName, lunUuid, err))
 	}
 
-	return nil
+	return targetInfo, nil
 }
 
-func (service *DsmService) createVolumeByDsm(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec) (webapi.LunInfo, error) {
+func (service *DsmService) createVolumeByDsm(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec) (*models.K8sVolumeRespSpec, error) {
 	// 1. Find a available location
 	if spec.Location == "" {
 		vol, err := service.getFirstAvailableVolume(dsm, spec.Size)
 		if err != nil {
-			return webapi.LunInfo{},
+			return nil,
 				status.Errorf(codes.Internal, fmt.Sprintf("Failed to get available location, err: %v", err))
 		}
 		spec.Location = vol.Path
@@ -212,13 +212,13 @@ func (service *DsmService) createVolumeByDsm(dsm *webapi.DSM, spec *models.Creat
 	// 2. Check if location exists
 	dsmVolInfo, err := dsm.VolumeGet(spec.Location)
 	if err != nil {
-		return webapi.LunInfo{},
+		return nil,
 			status.Errorf(codes.InvalidArgument, fmt.Sprintf("Unable to find location %s", spec.Location))
 	}
 
 	lunType, err := getLunTypeByInputParams(spec.Type, spec.ThinProvisioning, dsmVolInfo.FsType)
 	if err != nil {
-		return webapi.LunInfo{},
+		return nil,
 			status.Errorf(codes.InvalidArgument, fmt.Sprintf("Unknown volume fs type: %s, location: %s", dsmVolInfo.FsType, spec.Location))
 	}
 
@@ -234,29 +234,29 @@ func (service *DsmService) createVolumeByDsm(dsm *webapi.DSM, spec *models.Creat
 	_, err = dsm.LunCreate(lunSpec)
 
 	if err != nil && !errors.Is(err, utils.AlreadyExistError("")) {
-		return webapi.LunInfo{},
-			status.Errorf(codes.Internal, fmt.Sprintf("Failed to create Volume with name: %s, err: %v", spec.K8sVolumeName, err))
+		return nil,
+			status.Errorf(codes.Internal, fmt.Sprintf("Failed to create LUN, err: %v", err))
 	}
 
 	// No matter lun existed or not, Get Lun by name
 	lunInfo, err := dsm.LunGet(spec.LunName)
 	if err != nil {
-		return webapi.LunInfo{},
+		return nil,
 			// discussion with log
 			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get existed LUN with name: %s, err: %v", spec.LunName, err))
 	}
 
 	// 4. Create Target and Map to Lun
-	err = service.createMappingTarget(dsm, spec, lunInfo.Uuid)
+	targetInfo, err := service.createMappingTarget(dsm, spec, lunInfo.Uuid)
 	if err != nil {
 		// FIXME need to delete lun and target
-		return webapi.LunInfo{},
+		return nil,
 			status.Errorf(codes.Internal, fmt.Sprintf("Failed to create and map target, err: %v", err))
 	}
 
-	log.Debugf("[%s] CreateVolume Successfully. VolumeId: %s", dsm.Ip, lunInfo.Uuid);
+	log.Debugf("[%s] CreateVolume Successfully. VolumeId: %s", dsm.Ip, lunInfo.Uuid)
 
-	return lunInfo, nil
+	return DsmLunToK8sVolume(dsm.Ip, lunInfo, targetInfo), nil
 }
 
 func waitCloneFinished(dsm *webapi.DSM, lunName string) error {
@@ -291,47 +291,47 @@ func waitCloneFinished(dsm *webapi.DSM, lunName string) error {
 	return nil
 }
 
-func (service *DsmService) createVolumeBySnapshot(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, snapshotInfo webapi.SnapshotInfo) (webapi.LunInfo, error) {
-	if spec.Size != 0 && spec.Size != snapshotInfo.TotalSize {
-		return webapi.LunInfo{}, status.Errorf(codes.OutOfRange, "Lun size [%d] is not equal to snapshot size [%d]", spec.Size, snapshotInfo.TotalSize)
+func (service *DsmService) createVolumeBySnapshot(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, srcSnapshot *models.K8sSnapshotRespSpec) (*models.K8sVolumeRespSpec, error) {
+	if spec.Size != 0 && spec.Size != srcSnapshot.SizeInBytes {
+		return nil, status.Errorf(codes.OutOfRange, "Requested lun size [%d] is not equal to snapshot size [%d]", spec.Size, srcSnapshot.SizeInBytes)
 	}
 
 	snapshotCloneSpec := webapi.SnapshotCloneSpec{
 		Name:            spec.LunName,
-		SrcLunUuid:      snapshotInfo.ParentUuid,
-		SrcSnapshotUuid: snapshotInfo.Uuid,
+		SrcLunUuid:      srcSnapshot.ParentUuid,
+		SrcSnapshotUuid: srcSnapshot.Uuid,
 	}
 
 	if _, err := dsm.SnapshotClone(snapshotCloneSpec); err != nil && !errors.Is(err, utils.AlreadyExistError("")) {
-		return webapi.LunInfo{},
-			status.Errorf(codes.Internal, fmt.Sprintf("Failed to create volume with source snapshot ID: %s, err: %v", snapshotInfo.Uuid, err))
+		return nil,
+			status.Errorf(codes.Internal, fmt.Sprintf("Failed to create volume with source snapshot ID: %s, err: %v", srcSnapshot.Uuid, err))
 	}
 
 	if err := waitCloneFinished(dsm, spec.LunName); err != nil {
-		return webapi.LunInfo{}, status.Errorf(codes.Internal, err.Error())
+		return nil, status.Errorf(codes.Internal, err.Error())
 	}
 
 	lunInfo, err := dsm.LunGet(spec.LunName)
 	if err != nil {
-		return webapi.LunInfo{},
+		return nil,
 			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get existed LUN with name: %s, err: %v", spec.LunName, err))
 	}
 
-	err = service.createMappingTarget(dsm, spec, lunInfo.Uuid)
+	targetInfo, err := service.createMappingTarget(dsm, spec, lunInfo.Uuid)
 	if err != nil {
 		// FIXME need to delete lun and target
-		return webapi.LunInfo{},
+		return nil,
 			status.Errorf(codes.Internal, fmt.Sprintf("Failed to create and map target, err: %v", err))
 	}
 
-	log.Debugf("[%s] createVolumeBySnapshot Successfully. VolumeId: %s", dsm.Ip, lunInfo.Uuid);
+	log.Debugf("[%s] createVolumeBySnapshot Successfully. VolumeId: %s", dsm.Ip, lunInfo.Uuid)
 
-	return lunInfo, nil
+	return DsmLunToK8sVolume(dsm.Ip, lunInfo, targetInfo), nil
 }
 
-func (service *DsmService) createVolumeByVolume(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, srcLunInfo webapi.LunInfo) (webapi.LunInfo, error) {
+func (service *DsmService) createVolumeByVolume(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, srcLunInfo webapi.LunInfo) (*models.K8sVolumeRespSpec, error) {
 	if spec.Size != 0 && spec.Size != int64(srcLunInfo.Size) {
-		return webapi.LunInfo{}, status.Errorf(codes.OutOfRange, "Lun size [%d] is not equal to src lun size [%d]", spec.Size, srcLunInfo.Size)
+		return nil, status.Errorf(codes.OutOfRange, "Requested lun size [%d] is not equal to src lun size [%d]", spec.Size, srcLunInfo.Size)
 	}
 
 	if spec.Location == "" {
@@ -345,166 +345,230 @@ func (service *DsmService) createVolumeByVolume(dsm *webapi.DSM, spec *models.Cr
 	}
 
 	if _, err := dsm.LunClone(lunCloneSpec); err != nil && !errors.Is(err, utils.AlreadyExistError("")) {
-		return webapi.LunInfo{},
+		return nil,
 			status.Errorf(codes.Internal, fmt.Sprintf("Failed to create volume with source volume ID: %s, err: %v", srcLunInfo.Uuid, err))
 	}
 
 	if err := waitCloneFinished(dsm, spec.LunName); err != nil {
-		return webapi.LunInfo{}, status.Errorf(codes.Internal, err.Error())
+		return nil, status.Errorf(codes.Internal, err.Error())
 	}
 
 	lunInfo, err := dsm.LunGet(spec.LunName)
 	if err != nil {
-		return webapi.LunInfo{},
+		return nil,
 			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get existed LUN with name: %s, err: %v", spec.LunName, err))
 	}
 
-	err = service.createMappingTarget(dsm, spec, lunInfo.Uuid)
+	targetInfo, err := service.createMappingTarget(dsm, spec, lunInfo.Uuid)
 	if err != nil {
 		// FIXME need to delete lun and target
-		return webapi.LunInfo{},
+		return nil,
 			status.Errorf(codes.Internal, fmt.Sprintf("Failed to create and map target, err: %v", err))
 	}
 
-	log.Debugf("[%s] createVolumeByVolume Successfully. VolumeId: %s", dsm.Ip, lunInfo.Uuid);
+	log.Debugf("[%s] createVolumeByVolume Successfully. VolumeId: %s", dsm.Ip, lunInfo.Uuid)
 
-	return lunInfo, nil
+	return DsmLunToK8sVolume(dsm.Ip, lunInfo, targetInfo), nil
 }
 
-func (service *DsmService) CreateVolume(spec *models.CreateK8sVolumeSpec) (webapi.LunInfo, string, error) {
+func DsmShareToK8sVolume(dsmIp string, info webapi.ShareInfo) *models.K8sVolumeRespSpec {
+	return &models.K8sVolumeRespSpec{
+		DsmIp: dsmIp,
+		VolumeId: info.Uuid,
+		SizeInBytes: utils.MBToBytes(info.QuotaValueInMB),
+		Location: info.VolPath,
+		Name: info.Name,
+		Source: "//" + dsmIp + "/" + info.Name,
+		Protocol: utils.ProtocolSmb,
+		Share: info,
+	}
+}
+
+func DsmLunToK8sVolume(dsmIp string, info webapi.LunInfo, targetInfo webapi.TargetInfo) *models.K8sVolumeRespSpec {
+	return &models.K8sVolumeRespSpec{
+		DsmIp: dsmIp,
+		VolumeId: info.Uuid,
+		SizeInBytes: int64(info.Size),
+		Location: info.Location,
+		Name: info.Name,
+		Source: "",
+		Protocol: utils.ProtocolIscsi,
+		Lun: info,
+		Target: targetInfo,
+	}
+}
+
+func (service *DsmService) CreateVolume(spec *models.CreateK8sVolumeSpec) (*models.K8sVolumeRespSpec, error) {
 	if spec.SourceVolumeId != "" {
 		/* Create volume by exists volume (Clone) */
 		k8sVolume := service.GetVolume(spec.SourceVolumeId)
 		if k8sVolume == nil {
-			return webapi.LunInfo{}, "", status.Errorf(codes.NotFound, fmt.Sprintf("No such volume id: %s", spec.SourceVolumeId))
+			return nil, status.Errorf(codes.NotFound, fmt.Sprintf("No such volume id: %s", spec.SourceVolumeId))
 		}
 
 		dsm, err := service.GetDsm(k8sVolume.DsmIp)
 		if err != nil {
-			return webapi.LunInfo{}, "", status.Errorf(codes.Internal, fmt.Sprintf("Failed to get DSM[%s]", k8sVolume.DsmIp))
+			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to get DSM[%s]", k8sVolume.DsmIp))
 		}
 
-		lunInfo, err := service.createVolumeByVolume(dsm, spec, k8sVolume.Lun)
-		return lunInfo, dsm.Ip, err
-	} else if spec.SourceSnapshotId != "" {
-		/* Create volume by snapshot */
-		for _, dsm := range service.dsms {
-			snapshotInfo, err := dsm.SnapshotGet(spec.SourceSnapshotId)
-			if err != nil {
-				continue
-			}
-
-			// found source by snapshot id, check allowable
-			if spec.DsmIp != "" && spec.DsmIp != dsm.Ip {
-				msg := fmt.Sprintf("The source PVC and destination PVCs must be on the same DSM for cloning from snapshots. Source is on %s, but new PVC is on %s",
-					dsm.Ip, spec.DsmIp)
-				return webapi.LunInfo{}, "", status.Errorf(codes.InvalidArgument, msg)
-			}
-			if spec.Location != "" && spec.Location != snapshotInfo.RootPath {
-				msg := fmt.Sprintf("The source PVC and destination PVCs must be on the same location for cloning from snapshots. Source is on %s, but new PVC is on %s",
-					snapshotInfo.RootPath, spec.Location)
-				return webapi.LunInfo{}, "", status.Errorf(codes.InvalidArgument, msg)
-			}
-
-			lunInfo, err := service.createVolumeBySnapshot(dsm, spec, snapshotInfo)
-			return lunInfo, dsm.Ip, err
+		if spec.Protocol == utils.ProtocolIscsi {
+			return service.createVolumeByVolume(dsm, spec, k8sVolume.Lun)
+		} else if spec.Protocol == utils.ProtocolSmb {
+			return service.createSMBVolumeByVolume(dsm, spec, k8sVolume.Share)
 		}
-		return webapi.LunInfo{}, "", status.Errorf(codes.NotFound, fmt.Sprintf("No such snapshot id: %s", spec.SourceSnapshotId))
-	} else if spec.DsmIp != "" {
-		/* Create volume by specific dsm ip */
-		dsm, err := service.GetDsm(spec.DsmIp)
-		if err != nil {
-			return webapi.LunInfo{}, "", status.Errorf(codes.Internal, fmt.Sprintf("%v", err))
-		}
-		lunInfo, err := service.createVolumeByDsm(dsm, spec)
-		return lunInfo, dsm.Ip, err
-	} else {
-		/* Find appropriate dsm to create volume */
-		for _, dsm := range service.dsms {
-			lunInfo, err := service.createVolumeByDsm(dsm, spec)
-			if err != nil {
-				log.Errorf("[%s] Failed to create Volume: %v", dsm.Ip, err)
-				continue
-			}
-			return lunInfo, dsm.Ip, nil
-		}
-		return webapi.LunInfo{}, "", status.Errorf(codes.Internal, fmt.Sprintf("Couldn't find any host available to create Volume"))
+		return nil, status.Error(codes.InvalidArgument, "Unknown protocol")
 	}
+
+	if spec.SourceSnapshotId != "" {
+		/* Create volume by snapshot */
+		snapshot := service.GetSnapshotByUuid(spec.SourceSnapshotId)
+		if snapshot == nil {
+			return nil, status.Errorf(codes.NotFound, fmt.Sprintf("No such snapshot id: %s", spec.SourceSnapshotId))
+		}
+
+		// found source by snapshot id, check allowable
+		if spec.DsmIp != "" && spec.DsmIp != snapshot.DsmIp {
+			msg := fmt.Sprintf("The source PVC and destination PVCs must be on the same DSM for cloning from snapshots. Source is on %s, but new PVC is on %s",
+				snapshot.DsmIp, spec.DsmIp)
+			return nil, status.Errorf(codes.InvalidArgument, msg)
+		}
+		if spec.Location != "" && spec.Location != snapshot.RootPath {
+			msg := fmt.Sprintf("The source PVC and destination PVCs must be on the same location for cloning from snapshots. Source is on %s, but new PVC is on %s",
+				snapshot.RootPath, spec.Location)
+			return nil, status.Errorf(codes.InvalidArgument, msg)
+		}
+		if spec.Protocol != snapshot.Protocol {
+			msg := fmt.Sprintf("The source PVC and destination PVCs shouldn't have different protocols. Source is %s, but new PVC is %s",
+				snapshot.Protocol, spec.Protocol)
+			return nil, status.Errorf(codes.InvalidArgument, msg)
+		}
+
+		dsm, err := service.GetDsm(snapshot.DsmIp)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to get DSM[%s]", snapshot.DsmIp))
+		}
+
+		if spec.Protocol == utils.ProtocolIscsi {
+			return service.createVolumeBySnapshot(dsm, spec, snapshot)
+		} else if spec.Protocol == utils.ProtocolSmb {
+			return service.createSMBVolumeBySnapshot(dsm, spec, snapshot)
+		}
+		return nil, status.Error(codes.InvalidArgument, "Unknown protocol")
+	}
+
+	/* Find appropriate dsm to create volume */
+	for _, dsm := range service.dsms {
+		if spec.DsmIp != "" && spec.DsmIp != dsm.Ip {
+			continue
+		}
+
+		var k8sVolume *models.K8sVolumeRespSpec
+		var err error
+		if spec.Protocol == utils.ProtocolIscsi {
+			k8sVolume, err = service.createVolumeByDsm(dsm, spec)
+		} else if spec.Protocol == utils.ProtocolSmb {
+			k8sVolume, err = service.createSMBVolumeByDsm(dsm, spec)
+		}
+
+		if err != nil {
+			log.Errorf("[%s] Failed to create Volume: %v", dsm.Ip, err)
+			continue
+		}
+
+		return k8sVolume, nil
+	}
+
+	return nil, status.Errorf(codes.Internal, fmt.Sprintf("Couldn't find any host available to create Volume"))
 }
 
-func (service *DsmService) DeleteVolume(volumeId string) error {
-	k8sVolume := service.GetVolume(volumeId)
+func (service *DsmService) DeleteVolume(volId string) error {
+	k8sVolume := service.GetVolume(volId)
 	if k8sVolume == nil {
-		log.Infof("Skip delete volume[%s] that is no exist", volumeId)
+		log.Infof("Skip delete volume[%s] that is no exist", volId)
 		return nil
 	}
 
-	lun, target := k8sVolume.Lun, k8sVolume.Target
 	dsm, err := service.GetDsm(k8sVolume.DsmIp)
-
 	if err != nil {
 		return status.Errorf(codes.Internal, fmt.Sprintf("Failed to get DSM[%s]", k8sVolume.DsmIp))
 	}
 
-	if err := dsm.LunDelete(lun.Uuid); err != nil {
-		return err
-	}
+	if k8sVolume.Protocol == utils.ProtocolSmb {
+		if err := dsm.ShareDelete(k8sVolume.Share.Name); err != nil {
+			log.Errorf("[%s] Failed to delete Share(%s): %v", dsm.Ip, k8sVolume.Share.Name, err)
+			return err
+		}
+	} else {
+		lun, target := k8sVolume.Lun, k8sVolume.Target
 
-	if len(target.MappedLuns) != 1 {
-		log.Infof("Skip deletes target[%s] that was mapped with lun. DSM[%s]", target.Name, dsm.Ip)
-		return nil
-	}
+		if err := dsm.LunDelete(lun.Uuid); err != nil {
+			if  _, err := dsm.LunGet(lun.Uuid); err != nil && errors.Is(err, utils.NoSuchLunError("")) {
+				return nil
+			}
+			log.Errorf("[%s] Failed to delete LUN(%s): %v", dsm.Ip, lun.Uuid, err)
+			return err
+		}
 
-	if err := dsm.TargetDelete(strconv.Itoa(target.TargetId)); err != nil {
-		return err
+		if len(target.MappedLuns) != 1 {
+			log.Infof("Skip deletes target[%s] that was mapped with lun. DSM[%s]", target.Name, dsm.Ip)
+			return nil
+		}
+
+		if err := dsm.TargetDelete(strconv.Itoa(target.TargetId)); err != nil {
+			if  _, err := dsm.TargetGet(strconv.Itoa(target.TargetId)); err != nil {
+				return nil
+			}
+			log.Errorf("[%s] Failed to delete target(%d): %v", dsm.Ip, target.TargetId, err)
+			return err
+		}
 	}
 
 	return nil
 }
 
-func (service *DsmService) listVolumesByDsm(dsm *webapi.DSM, infos *[]*models.ListK8sVolumeRespSpec) {
-	targetInfos, err := dsm.TargetList()
-	if err != nil {
-		log.Errorf("[%s] Failed to list targets: %v", dsm.Ip, err)
-	}
+func (service *DsmService) listISCSIVolumes(dsmIp string) (infos []*models.K8sVolumeRespSpec) {
+	for _, dsm := range service.dsms {
+		if dsmIp != "" && dsmIp != dsm.Ip {
+			continue
+		}
 
-	for _, target := range targetInfos {
-		// TODO: use target.ConnectedSessions to filter targets
-		for _, mapping := range target.MappedLuns {
-			lun, err := dsm.LunGet(mapping.LunUuid)
-			if err != nil {
-				log.Errorf("[%s] Failed to get LUN(%s): %v", dsm.Ip, mapping.LunUuid, err)
+		targetInfos, err := dsm.TargetList()
+		if err != nil {
+			log.Errorf("[%s] Failed to list targets: %v", dsm.Ip, err)
+			continue
+		}
+
+		for _, target := range targetInfos {
+			// TODO: use target.ConnectedSessions to filter targets
+			for _, mapping := range target.MappedLuns {
+				lun, err := dsm.LunGet(mapping.LunUuid)
+				if err != nil {
+					log.Errorf("[%s] Failed to get LUN(%s): %v", dsm.Ip, mapping.LunUuid, err)
+				}
+
+				if !strings.HasPrefix(lun.Name, models.LunPrefix) {
+					continue
+				}
+
+				// FIXME: filter same LUN mapping to two target
+				infos = append(infos, DsmLunToK8sVolume(dsm.Ip, lun, target))
 			}
-
-			if !strings.HasPrefix(lun.Name, models.LunPrefix) {
-				continue
-			}
-
-			*infos = append(*infos, &models.ListK8sVolumeRespSpec{
-				DsmIp:  dsm.Ip,
-				Target: target,
-				Lun:    lun,
-			})
 		}
 	}
-	return
+	return infos
 }
 
-func (service *DsmService) ListVolumes() []*models.ListK8sVolumeRespSpec {
-	var infos []*models.ListK8sVolumeRespSpec
-
-	for _, dsm := range service.dsms {
-		service.listVolumesByDsm(dsm, &infos)
-	}
+func (service *DsmService) ListVolumes() (infos []*models.K8sVolumeRespSpec) {
+	infos = append(infos, service.listISCSIVolumes("")...)
+	infos = append(infos, service.listSMBVolumes("")...)
 
 	return infos
 }
 
-func (service *DsmService) GetVolume(lunUuid string) *models.ListK8sVolumeRespSpec {
+func (service *DsmService) GetVolume(volId string) *models.K8sVolumeRespSpec {
 	volumes := service.ListVolumes()
-
 	for _, volume := range volumes {
-		if volume.Lun.Uuid == lunUuid {
+		if volume.VolumeId == volId {
 			return volume
 		}
 	}
@@ -512,100 +576,74 @@ func (service *DsmService) GetVolume(lunUuid string) *models.ListK8sVolumeRespSp
 	return nil
 }
 
-func (service *DsmService) ExpandLun(lunUuid string, newSize int64) error {
-	k8sVolume := service.GetVolume(lunUuid);
-	if k8sVolume == nil {
-		return status.Errorf(codes.InvalidArgument, fmt.Sprintf("Can't find volume[%s].", lunUuid))
-	}
-
-	if int64(k8sVolume.Lun.Size) > newSize {
-		return status.Errorf(codes.InvalidArgument,
-			fmt.Sprintf("Failed to expand volume[%s], because expand size[%d] bigger than before[%d].",
-				lunUuid, newSize, k8sVolume.Lun.Size))
-	}
-
-	spec := webapi.LunUpdateSpec{
-		Uuid: lunUuid,
-		NewSize: uint64(newSize),
-	}
-
-	dsm, err := service.GetDsm(k8sVolume.DsmIp)
-	if err != nil {
-		return status.Errorf(codes.Internal, fmt.Sprintf("Failed to get DSM[%s]", k8sVolume.DsmIp))
-	}
-
-	if err := dsm.LunUpdate(spec); err != nil {
-		return status.Errorf(codes.InvalidArgument,
-			fmt.Sprintf("Failed to expand volume[%s]. err: %v", lunUuid, err))
+func (service *DsmService) GetVolumeByName(volName string) *models.K8sVolumeRespSpec {
+	volumes := service.ListVolumes()
+	for _, volume := range volumes {
+		if volume.Name == models.GenLunName(volName) ||
+			volume.Name == models.GenShareName(volName) {
+			return volume
+		}
 	}
 
 	return nil
 }
 
-func (service *DsmService) CreateSnapshot(spec *models.CreateK8sVolumeSnapshotSpec) (string, error) {
-	k8sVolume := service.GetVolume(spec.K8sVolumeId);
+func (service *DsmService) GetSnapshotByName(snapshotName string) *models.K8sSnapshotRespSpec {
+	snaps := service.ListAllSnapshots()
+	for _, snap := range snaps {
+		if snap.Name == snapshotName {
+			return snap
+		}
+	}
+	return nil
+}
+
+func (service *DsmService) ExpandVolume(volId string, newSize int64) (*models.K8sVolumeRespSpec, error) {
+	k8sVolume := service.GetVolume(volId);
 	if k8sVolume == nil {
-		return "", status.Errorf(codes.NotFound, fmt.Sprintf("Can't find volume[%s].", spec.K8sVolumeId))
+		return nil, status.Errorf(codes.InvalidArgument, fmt.Sprintf("Can't find volume[%s].", volId))
 	}
 
-	snapshotSpec := webapi.SnapshotCreateSpec{
-		Name:    spec.SnapshotName,
-		LunUuid: spec.K8sVolumeId,
-		Description: spec.Description,
-		TakenBy: spec.TakenBy,
-		IsLocked: spec.IsLocked,
+	if k8sVolume.SizeInBytes > newSize {
+		return nil, status.Errorf(codes.InvalidArgument,
+			fmt.Sprintf("Failed to expand volume[%s], because expand size[%d] smaller than before[%d].",
+				volId, newSize, k8sVolume.SizeInBytes))
 	}
 
 	dsm, err := service.GetDsm(k8sVolume.DsmIp)
 	if err != nil {
-		return "", status.Errorf(codes.InvalidArgument, fmt.Sprintf("Failed to get dsm: %v", err))
+		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to get DSM[%s]", k8sVolume.DsmIp))
 	}
 
-	snapshotUuid, err := dsm.SnapshotCreate(snapshotSpec)
-	if err != nil {
-		return "", err
+	if k8sVolume.Protocol == utils.ProtocolSmb {
+		newSizeInMB := utils.BytesToMBCeil(newSize) // round up to MB
+		if err := dsm.SetShareQuota(k8sVolume.Share, newSizeInMB); err != nil {
+			log.Errorf("[%s] Failed to set quota [%d (MB)] to Share [%s]: %v",
+				dsm.Ip, newSizeInMB, k8sVolume.Share.Name, err)
+			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to expand volume[%s]. err: %v", volId, err))
+		}
+		// convert MB to bytes, may be diff from the input newSize
+		k8sVolume.SizeInBytes = utils.MBToBytes(newSizeInMB)
+	} else {
+		spec := webapi.LunUpdateSpec{
+			Uuid: volId,
+			NewSize: uint64(newSize),
+		}
+		if err := dsm.LunUpdate(spec); err != nil {
+			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to expand volume[%s]. err: %v", volId, err))
+		}
+		k8sVolume.SizeInBytes = newSize
 	}
 
-	return snapshotUuid, nil
+	return k8sVolume, nil
 }
 
-func (service *DsmService) DeleteSnapshot(snapshotUuid string) error {
-	for _, dsm := range service.dsms {
-		_, err := dsm.SnapshotGet(snapshotUuid)
-		if err != nil {
-			continue
-		}
+func (service *DsmService) CreateSnapshot(spec *models.CreateK8sVolumeSnapshotSpec) (*models.K8sSnapshotRespSpec, error) {
+	srcVolId := spec.K8sVolumeId
 
-		err = dsm.SnapshotDelete(snapshotUuid)
-		if err != nil {
-			return status.Errorf(codes.Internal, fmt.Sprintf("Failed to delete snapshot [%s]. err: %v", snapshotUuid, err))
-		}
-
-		return nil
-	}
-
-	return nil
-}
-
-func (service *DsmService) ListAllSnapshots() ([]webapi.SnapshotInfo, error) {
-	var allInfos []webapi.SnapshotInfo
-
-	for _, dsm := range service.dsms {
-		infos, err := dsm.SnapshotList("")
-		if err != nil {
-			continue
-		}
-
-		allInfos = append(allInfos, infos...)
-	}
-
-	return allInfos, nil
-}
-
-func (service *DsmService) ListSnapshots(lunUuid string) ([]webapi.SnapshotInfo, error) {
-	k8sVolume := service.GetVolume(lunUuid);
+	k8sVolume := service.GetVolume(srcVolId);
 	if k8sVolume == nil {
-		return []webapi.SnapshotInfo{}, nil // return empty when the volume does not exist
+		return nil, status.Errorf(codes.NotFound, fmt.Sprintf("Can't find volume[%s].", srcVolId))
 	}
 
 	dsm, err := service.GetDsm(k8sVolume.DsmIp)
@@ -613,24 +651,201 @@ func (service *DsmService) ListSnapshots(lunUuid string) ([]webapi.SnapshotInfo,
 		return nil, status.Errorf(codes.InvalidArgument, fmt.Sprintf("Failed to get dsm: %v", err))
 	}
 
-	infos, err := dsm.SnapshotList(lunUuid)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal,
-			fmt.Sprintf("Failed to list snapshot on lun [%s]. err: %v", lunUuid, err))
+	if k8sVolume.Protocol == utils.ProtocolIscsi {
+		snapshotSpec := webapi.SnapshotCreateSpec{
+			Name:    spec.SnapshotName,
+			LunUuid: srcVolId,
+			Description: spec.Description,
+			TakenBy: spec.TakenBy,
+			IsLocked: spec.IsLocked,
+		}
+
+		snapshotUuid, err := dsm.SnapshotCreate(snapshotSpec)
+		if err != nil {
+			if err == utils.OutOfFreeSpaceError("") || err == utils.SnapshotReachMaxCountError("") {
+				return nil,status.Errorf(codes.ResourceExhausted, fmt.Sprintf("Failed to SnapshotCreate(%s), err: %v", srcVolId, err))
+			}
+			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to SnapshotCreate(%s), err: %v", srcVolId, err))
+		}
+
+		if snapshot := service.getISCSISnapshot(snapshotUuid); snapshot != nil {
+			return snapshot, nil
+		}
+
+		return nil, status.Errorf(codes.NotFound, fmt.Sprintf("Failed to get iscsi snapshot (%s). Not found", snapshotUuid))
+	} else if k8sVolume.Protocol == utils.ProtocolSmb {
+		snapshotSpec := webapi.ShareSnapshotCreateSpec{
+			ShareName: k8sVolume.Share.Name,
+			Desc:      models.ShareSnapshotDescPrefix + spec.SnapshotName, // limitations: don't change the desc by DSM
+			IsLocked:  spec.IsLocked,
+		}
+
+		snapshotTime, err := dsm.ShareSnapshotCreate(snapshotSpec)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to ShareSnapshotCreate(%s), err: %v", srcVolId, err))
+		}
+
+		snapshots := service.listSMBSnapshotsByDsm(dsm)
+		for _, snapshot := range snapshots {
+			if snapshot.Time == snapshotTime && snapshot.ParentUuid == srcVolId {
+				return snapshot, nil
+			}
+		}
+		return nil, status.Errorf(codes.NotFound, fmt.Sprintf("Failed to get smb snapshot (%s, %s). Not found", snapshotTime, srcVolId))
 	}
 
-	return infos, nil
+	return nil, status.Error(codes.InvalidArgument, "Unsupported volume protocol")
 }
 
-func (service *DsmService) GetSnapshot(snapshotUuid string) (webapi.SnapshotInfo, error) {
-	for _, dsm := range service.dsms {
-		info, err := dsm.SnapshotGet(snapshotUuid)
+func (service *DsmService) GetSnapshotByUuid(snapshotUuid string) *models.K8sSnapshotRespSpec {
+	snaps := service.ListAllSnapshots()
+	for _, snap := range snaps {
+		if snap.Uuid == snapshotUuid {
+			return snap
+		}
+	}
+	return nil
+}
+
+func (service *DsmService) DeleteSnapshot(snapshotUuid string) error {
+	snapshot := service.GetSnapshotByUuid(snapshotUuid)
+	if snapshot == nil {
+		return nil
+	}
+	dsm, err := service.GetDsm(snapshot.DsmIp)
+	if err != nil {
+		return err
+	}
+
+	if snapshot.Protocol == utils.ProtocolSmb {
+		if err := dsm.ShareSnapshotDelete(snapshot.Time, snapshot.ParentName); err != nil {
+			if snapshot := service.getSMBSnapshot(snapshotUuid); snapshot == nil { // idempotency
+				return nil
+			}
+
+			log.Errorf("Failed to delete Share snapshot [%s]. err: %v", snapshotUuid, err)
+			return err
+		}
+	} else if snapshot.Protocol == utils.ProtocolIscsi {
+		if err := dsm.SnapshotDelete(snapshotUuid); err != nil {
+			if _, err := dsm.SnapshotGet(snapshotUuid); err != nil { // idempotency
+				return nil
+			}
+
+			log.Errorf("Failed to delete LUN snapshot [%s]. err: %v", snapshotUuid, err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (service *DsmService) listISCSISnapshotsByDsm(dsm *webapi.DSM) (infos []*models.K8sSnapshotRespSpec) {
+	volumes := service.listISCSIVolumes(dsm.Ip)
+	for _, volume := range volumes {
+		lunInfo := volume.Lun
+		lunSnaps, err := dsm.SnapshotList(lunInfo.Uuid)
 		if err != nil {
+			log.Errorf("[%s] Failed to list LUN[%s] snapshots: %v", dsm.Ip, lunInfo.Uuid, err)
 			continue
 		}
 
-		return info, nil
+		for _, info := range lunSnaps {
+			infos = append(infos, DsmLunSnapshotToK8sSnapshot(dsm.Ip, info, lunInfo))
+		}
+	}
+	return
+}
+
+func (service *DsmService) ListAllSnapshots() []*models.K8sSnapshotRespSpec {
+	var allInfos []*models.K8sSnapshotRespSpec
+
+	for _, dsm := range service.dsms {
+		allInfos = append(allInfos, service.listISCSISnapshotsByDsm(dsm)...)
+		allInfos = append(allInfos, service.listSMBSnapshotsByDsm(dsm)...)
 	}
 
-	return webapi.SnapshotInfo{}, status.Errorf(codes.Internal, fmt.Sprintf("No such snapshot uuid [%s]", snapshotUuid))
+	return allInfos
+}
+
+func (service *DsmService) ListSnapshots(volId string) []*models.K8sSnapshotRespSpec {
+	var allInfos []*models.K8sSnapshotRespSpec
+
+	k8sVolume := service.GetVolume(volId);
+	if k8sVolume == nil {
+		return nil
+	}
+
+	dsm, err := service.GetDsm(k8sVolume.DsmIp)
+	if err != nil {
+		log.Errorf("Failed to get DSM[%s]", k8sVolume.DsmIp)
+		return nil
+	}
+
+	if k8sVolume.Protocol == utils.ProtocolIscsi {
+		infos, err := dsm.SnapshotList(volId)
+		if err != nil {
+			log.Errorf("Failed to SnapshotList[%s]", volId)
+			return nil
+		}
+		for _, info := range infos {
+			allInfos = append(allInfos, DsmLunSnapshotToK8sSnapshot(dsm.Ip, info, k8sVolume.Lun))
+		}
+	} else {
+		infos, err := dsm.ShareSnapshotList(k8sVolume.Share.Name)
+		if err != nil {
+			log.Errorf("Failed to ShareSnapshotList[%s]", k8sVolume.Share.Name)
+			return nil
+		}
+		for _, info := range infos {
+			allInfos = append(allInfos, DsmShareSnapshotToK8sSnapshot(dsm.Ip, info, k8sVolume.Share))
+		}
+	}
+
+	return allInfos
+}
+
+func DsmShareSnapshotToK8sSnapshot(dsmIp string, info webapi.ShareSnapshotInfo, shareInfo webapi.ShareInfo) *models.K8sSnapshotRespSpec {
+	return &models.K8sSnapshotRespSpec{
+		DsmIp: dsmIp,
+		Name: strings.ReplaceAll(info.Desc, models.ShareSnapshotDescPrefix, ""), // snapshot-XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
+		Uuid: info.Uuid,
+		ParentName: shareInfo.Name,
+		ParentUuid: shareInfo.Uuid,
+		Status: "Healthy", // share snapshot always Healthy
+		SizeInBytes: utils.MBToBytes(shareInfo.QuotaValueInMB), // unable to get snapshot quota, return parent quota instead
+		CreateTime: GMTToUnixSecond(info.Time),
+		Time: info.Time,
+		RootPath: shareInfo.VolPath,
+		Protocol: utils.ProtocolSmb,
+	}
+}
+
+func DsmLunSnapshotToK8sSnapshot(dsmIp string, info webapi.SnapshotInfo, lunInfo webapi.LunInfo) *models.K8sSnapshotRespSpec {
+	return &models.K8sSnapshotRespSpec{
+		DsmIp: dsmIp,
+		Name: info.Name,
+		Uuid: info.Uuid,
+		ParentName: lunInfo.Name, // it can be empty for iscsi
+		ParentUuid: info.ParentUuid,
+		Status: info.Status,
+		SizeInBytes: info.TotalSize,
+		CreateTime: info.CreateTime,
+		Time: "",
+		RootPath: info.RootPath,
+		Protocol: utils.ProtocolIscsi,
+	}
+}
+
+func (service *DsmService) getISCSISnapshot(snapshotUuid string) *models.K8sSnapshotRespSpec {
+	for _, dsm := range service.dsms {
+		snapshots := service.listISCSISnapshotsByDsm(dsm)
+		for _, snap := range snapshots {
+			if snap.Uuid == snapshotUuid {
+				return snap
+			}
+		}
+	}
+
+	return nil
 }

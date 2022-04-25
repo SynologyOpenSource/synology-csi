@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"github.com/spf13/cobra"
+	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/common"
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/webapi"
 )
 
@@ -49,6 +50,30 @@ var cmdDsmLogin = &cobra.Command{
 			os.Exit(1)
 		}
 	},
+}
+
+// Always get the first client from ClientInfo for synocli testing
+func LoginDsmForTest() (*webapi.DSM, error) {
+	info, err := common.LoadConfig("./config/client-info.yml")
+	if err != nil {
+		return nil, fmt.Errorf("Failed to read config: %v", err)
+	}
+	if len(info.Clients) == 0 {
+		return nil, fmt.Errorf("No client in client-info.yml")
+	}
+
+	dsm := &webapi.DSM{
+		Ip:       info.Clients[0].Host,
+		Port:     info.Clients[0].Port,
+		Username: info.Clients[0].Username,
+		Password: info.Clients[0].Password,
+		Https:    info.Clients[0].Https,
+	}
+
+	if err := dsm.Login(); err != nil {
+		return nil, fmt.Errorf("Failed to login to DSM: [%s]. err: %v", dsm.Ip, err)
+	}
+	return dsm, nil
 }
 
 func init() {

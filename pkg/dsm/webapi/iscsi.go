@@ -108,6 +108,8 @@ func errCodeMapping(errCode int, oriErr error) error {
 	switch errCode {
 	case 18990002: // Out of free space
 		return utils.OutOfFreeSpaceError("")
+	case 18990531: // No such LUN
+		return utils.NoSuchLunError("")
 	case 18990538: // Duplicated LUN name
 		return utils.AlreadyExistError("")
 	case 18990541:
@@ -125,7 +127,7 @@ func errCodeMapping(errCode int, oriErr error) error {
 	}
 
 	if errCode > 18990000 {
-		return utils.IscsiDefaultError("")
+		return utils.IscsiDefaultError{errCode}
 	}
 	return oriErr
 }
@@ -144,7 +146,7 @@ func (dsm *DSM) LunList() ([]LunInfo, error) {
 
 	resp, err := dsm.sendRequest("", &LunInfos{}, params, "webapi/entry.cgi")
 	if err != nil {
-		return nil, err
+		return nil, errCodeMapping(resp.ErrorCode, err)
 	}
 
 	lunInfos, ok := resp.Data.(*LunInfos)
@@ -175,9 +177,8 @@ func (dsm *DSM) LunCreate(spec LunCreateSpec) (string, error) {
 	}
 
 	resp, err := dsm.sendRequest("", &LunCreateResp{}, params, "webapi/entry.cgi")
-	err = errCodeMapping(resp.ErrorCode, err)
 	if err != nil {
-		return "", err
+		return "", errCodeMapping(resp.ErrorCode, err)
 	}
 
 	lunResp, ok := resp.Data.(*LunCreateResp)
@@ -196,9 +197,9 @@ func (dsm *DSM) LunUpdate(spec LunUpdateSpec) error {
 	params.Add("uuid", strconv.Quote(spec.Uuid))
 	params.Add("new_size", strconv.FormatInt(int64(spec.NewSize), 10))
 
-	_, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
+	resp, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
 	if err != nil {
-		return err
+		return errCodeMapping(resp.ErrorCode, err)
 	}
 
 	return nil
@@ -217,9 +218,9 @@ func (dsm *DSM) LunGet(uuid string) (LunInfo, error) {
 	}
 	info := Info{}
 
-	_, err := dsm.sendRequest("", &info, params, "webapi/entry.cgi")
+	resp, err := dsm.sendRequest("", &info, params, "webapi/entry.cgi")
 	if err != nil {
-		return LunInfo{}, err
+		return LunInfo{}, errCodeMapping(resp.ErrorCode, err)
 	}
 
 	return info.Lun, nil
@@ -239,9 +240,8 @@ func (dsm *DSM) LunClone(spec LunCloneSpec) (string, error) {
 	}
 
 	resp, err := dsm.sendRequest("", &LunCloneResp{}, params, "webapi/entry.cgi")
-	err = errCodeMapping(resp.ErrorCode, err)
 	if err != nil {
-		return "", err
+		return "", errCodeMapping(resp.ErrorCode, err)
 	}
 
 	cloneLunResp, ok := resp.Data.(*LunCloneResp)
@@ -265,7 +265,7 @@ func (dsm *DSM) TargetList() ([]TargetInfo, error) {
 
 	resp, err := dsm.sendRequest("", &TargetInfos{}, params, "webapi/entry.cgi")
 	if err != nil {
-		return nil, err
+		return nil, errCodeMapping(resp.ErrorCode, err)
 	}
 
 	trgInfos, ok := resp.Data.(*TargetInfos)
@@ -288,9 +288,9 @@ func (dsm *DSM) TargetGet(targetId string) (TargetInfo, error) {
 	}
 	info := Info{}
 
-	_, err := dsm.sendRequest("", &info, params, "webapi/entry.cgi")
+	resp, err := dsm.sendRequest("", &info, params, "webapi/entry.cgi")
 	if err != nil {
-		return TargetInfo{}, err
+		return TargetInfo{}, errCodeMapping(resp.ErrorCode, err)
 	}
 
 	return info.Target, nil
@@ -305,9 +305,9 @@ func (dsm *DSM) TargetSet(targetId string, maxSession int) error {
 	params.Add("target_id", strconv.Quote(targetId))
 	params.Add("max_sessions", strconv.Itoa(maxSession))
 
-	_, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
+	resp, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
 	if err != nil {
-		return err
+		return errCodeMapping(resp.ErrorCode, err)
 	}
 
 	return nil
@@ -327,9 +327,8 @@ func (dsm *DSM) TargetCreate(spec TargetCreateSpec) (string, error) {
 	}
 
 	resp, err := dsm.sendRequest("", &TrgCreateResp{}, params, "webapi/entry.cgi")
-	err = errCodeMapping(resp.ErrorCode, err)
 	if err != nil {
-		return "", err
+		return "", errCodeMapping(resp.ErrorCode, err)
 	}
 
 	trgResp, ok := resp.Data.(*TrgCreateResp)
@@ -352,9 +351,9 @@ func (dsm *DSM) LunMapTarget(targetIds []string, lunUuid string) error {
 		log.Debugln(params)
 	}
 
-	_, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
+	resp, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
 	if err != nil {
-		return err
+		return errCodeMapping(resp.ErrorCode, err)
 	}
 	return nil
 }
@@ -366,9 +365,9 @@ func (dsm *DSM) LunDelete(lunUuid string) error {
 	params.Add("version", "1")
 	params.Add("uuid", strconv.Quote(lunUuid))
 
-	_, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
+	resp, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
 	if err != nil {
-		return err
+		return errCodeMapping(resp.ErrorCode, err)
 	}
 	return nil
 }
@@ -380,9 +379,9 @@ func (dsm *DSM) TargetDelete(targetName string) error {
 	params.Add("version", "1")
 	params.Add("target_id", strconv.Quote(targetName))
 
-	_, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
+	resp, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
 	if err != nil {
-		return err
+		return errCodeMapping(resp.ErrorCode, err)
 	}
 	return nil
 }

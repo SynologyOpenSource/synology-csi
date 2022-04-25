@@ -46,6 +46,9 @@ rules:
   - apiGroups: ["snapshot.storage.k8s.io"]
     resources: ["volumesnapshotcontents"]
     verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
 
 ---
 kind: ClusterRoleBinding
@@ -140,7 +143,7 @@ spec:
             capabilities:
               add: ["SYS_ADMIN"]
             allowPrivilegeEscalation: true
-          image: synology/synology-csi:v1.0.1
+          image: synology/synology-csi:v1.1.0
           args:
             - --nodeid=NotUsed
             - --endpoint=$(CSI_ENDPOINT)

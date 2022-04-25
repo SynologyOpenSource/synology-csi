@@ -16,14 +16,15 @@ type IDsmService interface {
 	GetDsm(ip string) (*webapi.DSM, error)
 	GetDsmsCount() int
 	ListDsmVolumes(ip string) ([]webapi.VolInfo, error)
-	CreateVolume(spec *models.CreateK8sVolumeSpec) (webapi.LunInfo, string, error)
-	DeleteVolume(volumeId string) error
-	ListVolumes() []*models.ListK8sVolumeRespSpec
-	GetVolume(lunUuid string) *models.ListK8sVolumeRespSpec
-	ExpandLun(lunUuid string, newSize int64) error
-	CreateSnapshot(spec *models.CreateK8sVolumeSnapshotSpec) (string, error)
+	CreateVolume(spec *models.CreateK8sVolumeSpec) (*models.K8sVolumeRespSpec, error)
+	DeleteVolume(volId string) error
+	ListVolumes() []*models.K8sVolumeRespSpec
+	GetVolume(volId string) *models.K8sVolumeRespSpec
+	ExpandVolume(volId string, newSize int64) (*models.K8sVolumeRespSpec, error)
+	CreateSnapshot(spec *models.CreateK8sVolumeSnapshotSpec) (*models.K8sSnapshotRespSpec, error)
 	DeleteSnapshot(snapshotUuid string) error
-	ListAllSnapshots() ([]webapi.SnapshotInfo, error)
-	ListSnapshots(lunUuid string) ([]webapi.SnapshotInfo, error)
-	GetSnapshot(snapshotUuid string) (webapi.SnapshotInfo, error)
+	ListAllSnapshots() []*models.K8sSnapshotRespSpec
+	ListSnapshots(volId string) []*models.K8sSnapshotRespSpec
+	GetVolumeByName(volName string) *models.K8sVolumeRespSpec
+	GetSnapshotByName(snapshotName string) *models.K8sSnapshotRespSpec
 }

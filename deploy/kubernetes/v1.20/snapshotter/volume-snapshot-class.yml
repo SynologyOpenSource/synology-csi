@@ -7,5 +7,5 @@ metadata:
 driver: csi.san.synology.com
 deletionPolicy: Delete
 # parameters:
-#   description: 'Kubernetes CSI'
+#   description: 'Kubernetes CSI' ＃ only for iscsi protocol
 #   is_locked: 'false'
