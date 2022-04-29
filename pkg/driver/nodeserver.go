@@ -342,10 +342,8 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	switch req.VolumeContext["protocol"] {
 	case utils.ProtocolSmb:
 		return ns.nodeStageSMBVolume(ctx, spec, req.GetSecrets())
-	case utils.ProtocolIscsi:
-		return ns.nodeStageISCSIVolume(ctx, spec)
 	default:
-		return nil, status.Error(codes.InvalidArgument, "Unknown protocol")
+		return ns.nodeStageISCSIVolume(ctx, spec)
 	}
 }
 
@@ -408,7 +406,7 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		if err := ns.Mounter.Interface.Mount(stagingTargetPath, targetPath, "", options); err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
-	case utils.ProtocolIscsi:
+	default:
 		if err := ns.loginTarget(volumeId); err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
@@ -426,8 +424,6 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		if err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
-	default:
-		return nil, status.Error(codes.InvalidArgument, fmt.Sprintf("Unknown protocol: %s", req.VolumeContext["protocol"]))
 	}
 
 	return &csi.NodePublishVolumeResponse{}, nil
