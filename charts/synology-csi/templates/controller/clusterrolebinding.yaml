@@ -1,0 +1,14 @@
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ include "synology-csi.controller.fullname" . }}
+  labels:
+    {{- include "synology-csi.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "synology-csi.controller.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "synology-csi.controller.fullname" . }}
+  apiGroup: rbac.authorization.k8s.io

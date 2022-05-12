@@ -1,0 +1,16 @@
+{{- if .Values.snapshotter.enabled }}
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ include "synology-csi.snapshotter.fullname" . }}
+  labels:
+    {{- include "synology-csi.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "synology-csi.snapshotter.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "synology-csi.snapshotter.fullname" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

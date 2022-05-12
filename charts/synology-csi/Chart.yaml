@@ -1,0 +1,7 @@
+apiVersion: v2
+name: synology-csi
+description: The official Container Storage Interface driver for Synology NAS.
+type: application
+kubeVersion: ">= 1.19.0"
+version: 0.1.0
+appVersion: v1.0.0

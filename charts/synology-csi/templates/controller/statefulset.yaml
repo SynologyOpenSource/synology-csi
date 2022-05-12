@@ -1,0 +1,121 @@
+kind: StatefulSet
+apiVersion: apps/v1
+metadata:
+  name: {{ include "synology-csi.controller.fullname" . }}
+  labels:
+    {{- include "synology-csi.labels" . | nindent 4 }}
+spec:
+  serviceName: "{{ include "synology-csi.fullname" . }}-controller"
+  replicas: {{ .Values.controller.replicaCount }}
+  selector:
+    matchLabels:
+      app: synology-csi-controller
+      {{- include "synology-csi.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/client-info-secret.yaml") . | sha256sum }}
+        {{- with .Values.controller.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        app: synology-csi-controller
+        {{- include "synology-csi.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "synology-csi.controller.serviceAccountName" . }}
+      hostNetwork: true
+      containers:
+        - name: csi-provisioner
+          securityContext:
+            {{- toYaml .Values.controller.securityContext | nindent 12 }}
+          image: {{ .Values.sidecars.provisioner.image.repository }}:{{ .Values.sidecars.provisioner.image.tag }}
+          args:
+            - --timeout=60s
+            - --csi-address=$(ADDRESS)
+            - --v={{ .Values.sidecars.provisioner.logLevel }}
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+            {{- with .Values.sidecars.provisioner.env }}
+              {{- toYaml . | nindent 12 }}
+            {{- end }}
+          imagePullPolicy: {{ default .Values.image.pullPolicy .Values.sidecars.provisioner.image.pullPolicy }}
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+          {{- with default .Values.controller.resources .Values.sidecars.provisioner.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        - name: csi-attacher
+          securityContext:
+            {{- toYaml .Values.controller.securityContext | nindent 12 }}
+          image: {{ .Values.sidecars.attacher.image.repository }}:{{ .Values.sidecars.attacher.image.tag }}
+          args:
+            - --v={{ .Values.sidecars.attacher.logLevel }}
+            - --csi-address=$(ADDRESS)
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+            {{- with .Values.sidecars.attacher.env }}
+              {{- toYaml . | nindent 12 }}
+            {{- end }}
+          imagePullPolicy: {{ default .Values.image.pullPolicy .Values.sidecars.attacher.image.pullPolicy }}
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+          {{- with default .Values.controller.resources .Values.sidecars.attacher.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        - name: csi-resizer
+          securityContext:
+            {{- toYaml .Values.controller.securityContext | nindent 12 }}
+          image: {{ .Values.sidecars.resizer.image.repository }}:{{ .Values.sidecars.resizer.image.tag }}
+          args:
+            - --v=5
+            - --csi-address=$(ADDRESS)
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+            {{- with .Values.sidecars.resizer.env }}
+              {{- toYaml . | nindent 12 }}
+            {{- end }}
+          imagePullPolicy: {{ default .Values.image.pullPolicy .Values.sidecars.resizer.image.pullPolicy }}
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+          {{- with default .Values.controller.resources .Values.sidecars.resizer.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        - name: csi-plugin
+          securityContext:
+            {{- toYaml .Values.controller.securityContext | nindent 12 }}
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+          args:
+            - --nodeid=NotUsed
+            - --endpoint=$(CSI_ENDPOINT)
+            - --client-info
+            - /etc/synology/client-info.yml
+            - --log-level={{ .Values.controller.logLevel }}
+          env:
+            - name: CSI_ENDPOINT
+              value: unix:///var/lib/csi/sockets/pluginproxy/csi.sock
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+            - name: client-info
+              mountPath: /etc/synology
+              readOnly: true
+          {{- with .Values.controller.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: socket-dir
+          emptyDir: {}
+        - name: client-info
+          secret:
+            secretName: {{ include "synology-csi.fullname" . }}-client-info
