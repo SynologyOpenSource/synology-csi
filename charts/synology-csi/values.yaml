@@ -29,6 +29,8 @@ controller:
       tag: ""
 # -- node configuration    
 node:
+  tolerations:
+    - operator: Exists
   csi-driver-registrar:
     image:
       repository: k8s.gcr.io/sig-storage/csi-node-driver-registrar
