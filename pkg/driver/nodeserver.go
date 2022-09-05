@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -43,53 +44,66 @@ type nodeServer struct {
 	Initiator  *initiatorDriver
 }
 
-func getExistedDevicePath(paths []string) string {
+func waitForDevicePathToExist(path string) error {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
-	timer := time.NewTimer(60 * time.Second)
+	timer := time.NewTimer(20 * time.Second)
 	defer timer.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			for _, path := range paths {
-				exists, err := mount.PathExists(path)
-				if err == nil && exists == true {
-					return path
-				} else {
-					log.Errorf("Can't find device path [%s], err: %v", path, err)
-				}
+			exists, err := mount.PathExists(path)
+			if err != nil {
+				return err
 			}
+			if exists == true {
+				return nil
+			}
+			log.Warnf("Device path [%s] doesn't exists yet, retrying in 1 second", path)
 		case <-timer.C:
-			return ""
+			return os.ErrNotExist
 		}
 	}
 }
 
-func (ns *nodeServer) getVolumeMountPath(volumeId string) string {
+// for unstage, resize volume
+func getExistedVolumeMountPath(targetIqn string, mappingIndex int) string {
 	paths := []string{}
 
-	k8sVolume := ns.dsmService.GetVolume(volumeId)
-	if k8sVolume == nil {
-		log.Errorf("Failed to get Volume id:%d.")
+	sessions := listSessionsByIqn(targetIqn)
+	for _, session := range sessions {
+		paths = append(paths, fmt.Sprintf("%sip-%s-iscsi-%s-lun-%d", "/dev/disk/by-path/", session.Portal, targetIqn, mappingIndex))
+	}
+
+	return getVolumeMountPath(paths)
+}
+
+// for publish, stage volume
+func getVolumeMountPath(iscsiDevPaths []string) string {
+	var path string
+
+	if len(iscsiDevPaths) > 1 { // check multipath exist
+		devices, err := lsblk(iscsiDevPaths, true)
+		if err != nil {
+			log.Errorf("Failed to lsblk for iscsi devices: %v", err)
+			return ""
+		}
+
+		multipathDevice, err := GetMultipathDevice(devices)
+		if err != nil {
+			log.Error(err)
+			return ""
+		}
+		path = filepath.Join("/dev/mapper", multipathDevice.Name)
+	} else if len(iscsiDevPaths) == 1 {
+		path = iscsiDevPaths[0]
+	} else {
 		return ""
 	}
-	// Assume target and lun 1-1 mapping
-	mappingIndex := k8sVolume.Target.MappedLuns[0].MappingIndex
 
-	ips, err := utils.LookupIPv4(k8sVolume.DsmIp)
-	if err != nil {
-		log.Errorf("Failed to lookup ipv4 for host: %s", k8sVolume.DsmIp)
-		paths = append(paths, fmt.Sprintf("%sip-%s:3260-iscsi-%s-lun-%d", "/dev/disk/by-path/", k8sVolume.DsmIp, k8sVolume.Target.Iqn, mappingIndex))
-	} else {
-		for _, ipv4 := range ips {
-			paths = append(paths, fmt.Sprintf("%sip-%s:3260-iscsi-%s-lun-%d", "/dev/disk/by-path/", ipv4, k8sVolume.Target.Iqn, mappingIndex))
-		}
-	}
-
-	path := getExistedDevicePath(paths)
-	if path == "" {
-		log.Errorf("Volume mount path is not exist.")
+	if err := waitForDevicePathToExist(path); err != nil {
+		log.Errorf("Can't find device path [%s],: %v", path, err)
 		return ""
 	}
 
@@ -124,19 +138,65 @@ func createTargetMountPath(mounter mount.Interface, mountPath string, isBlock bo
 	return notMount, nil
 }
 
-func (ns *nodeServer) loginTarget(volumeId string) error {
+func (ns *nodeServer) getPortals(dsmIp string) []string {
+	portals := []string{}
+
+	dsm, err := ns.dsmService.GetDsm(dsmIp)
+	if err != nil {
+		log.Errorf("Failed to get DSM[%s]", dsmIp)
+		return portals
+	}
+
+	ips, err := utils.LookupIPv4(dsmIp)
+	if err != nil {
+		log.Error(err)
+		portals = append(portals, fmt.Sprintf("%s:%d", dsmIp, ISCSIPort))
+	} else {
+		portals = append(portals, fmt.Sprintf("%s:%d", ips[0], ISCSIPort)) //get the first ip
+	}
+
+	if dsm.IsUC() && IsMultipathEnabled() {
+		dsm2, err := dsm.GetAnotherController()
+		if err != nil {
+			log.Errorf("[%s] UC failed to get another controller: %v", err)
+		} else {
+			portals = append(portals, fmt.Sprintf("%s:%d", dsm2.Ip, ISCSIPort))
+		}
+	}
+	return portals
+}
+
+func (ns *nodeServer) loginTarget(volumeId string) ([]string, error) {
+	paths := []string{}
 	k8sVolume := ns.dsmService.GetVolume(volumeId)
 
 	if k8sVolume == nil {
-		return status.Error(codes.NotFound, fmt.Sprintf("Volume[%s] is not found", volumeId))
+		return nil, status.Error(codes.NotFound, fmt.Sprintf("Volume[%s] is not found", volumeId))
 	}
 
-	if err := ns.Initiator.login(k8sVolume.Target.Iqn, k8sVolume.DsmIp); err != nil {
-		return status.Errorf(codes.Internal,
-			fmt.Sprintf("Failed to login with target iqn [%s], err: %v", k8sVolume.Target.Iqn, err))
+	portals := ns.getPortals(k8sVolume.DsmIp)
+	if len(portals) == 0 {
+		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to get portals"))
 	}
 
-	return nil
+	// Assume target and lun 1-1 mapping
+	mappingIndex := k8sVolume.Target.MappedLuns[0].MappingIndex
+	for _, portal := range portals {
+		if err := ns.Initiator.login(k8sVolume.Target.Iqn, portal); err != nil {
+			return nil, status.Errorf(codes.Internal,
+				fmt.Sprintf("Failed to login with target iqn [%s], err: %v", k8sVolume.Target.Iqn, err))
+		}
+
+		path := fmt.Sprintf("%sip-%s-iscsi-%s-lun-%d", "/dev/disk/by-path/", portal, k8sVolume.Target.Iqn, mappingIndex)
+		if err := waitForDevicePathToExist(path); err != nil {
+			log.Errorf("Can't find device path [%s]: %v", path, err)
+			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Can't find device path [%s]: %v", path, err))
+		}
+
+		paths = append(paths, path)
+	}
+
+	return paths, nil
 }
 
 func (ns *nodeServer) logoutTarget(volumeId string) {
@@ -144,6 +204,16 @@ func (ns *nodeServer) logoutTarget(volumeId string) {
 
 	if k8sVolume == nil || k8sVolume.Protocol != utils.ProtocolIscsi {
 		return
+	}
+
+	// Assume target and lun 1-1 mapping
+	mappingIndex := k8sVolume.Target.MappedLuns[0].MappingIndex
+	volumeMountPath := getExistedVolumeMountPath(k8sVolume.Target.Iqn, mappingIndex)
+
+	if strings.Contains(volumeMountPath, "/dev/mapper") && IsMultipathEnabled() {
+		if err := multipath_flush(volumeMountPath); err != nil {
+			log.Errorf("Failed to remove multipath device in path %s. err: %v", volumeMountPath, err)
+		}
 	}
 
 	ns.Initiator.logout(k8sVolume.Target.Iqn, k8sVolume.DsmIp)
@@ -233,11 +303,12 @@ func (ns *nodeServer) nodeStageISCSIVolume(ctx context.Context, spec *models.Nod
 		return &csi.NodeStageVolumeResponse{}, nil
 	}
 
-	if err := ns.loginTarget(spec.VolumeId); err != nil {
+	iscsiDevPaths, err := ns.loginTarget(spec.VolumeId)
+	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	volumeMountPath := ns.getVolumeMountPath(spec.VolumeId)
+	volumeMountPath := getVolumeMountPath(iscsiDevPaths)
 	if volumeMountPath == "" {
 		return nil, status.Error(codes.Internal, "Can't get volume mount path")
 	}
@@ -407,11 +478,12 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	default:
-		if err := ns.loginTarget(volumeId); err != nil {
+		iscsiDevPaths, err := ns.loginTarget(volumeId)
+		if err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 
-		volumeMountPath := ns.getVolumeMountPath(volumeId)
+		volumeMountPath := getVolumeMountPath(iscsiDevPaths)
 		if volumeMountPath == "" {
 			return nil, status.Error(codes.Internal, "Can't get volume mount path")
 		}
@@ -545,15 +617,23 @@ func (ns *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to rescan. err: %v", err))
 	}
 
+	// Assume target and lun 1-1 mapping
+	mappingIndex := k8sVolume.Target.MappedLuns[0].MappingIndex
+	volumeMountPath := getExistedVolumeMountPath(k8sVolume.Target.Iqn, mappingIndex)
+	if volumeMountPath == "" {
+		return nil, status.Error(codes.Internal, "Can't get volume mount path")
+	}
+
+	if strings.Contains(volumeMountPath, "/dev/mapper") && IsMultipathEnabled() {
+		if err := multipath_resize(filepath.Base(volumeMountPath)); err != nil {
+			return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to resize multipath device in %s. err: %v", volumeMountPath, err))
+		}
+	}
+
 	isBlock := req.GetVolumeCapability() != nil && req.GetVolumeCapability().GetBlock() != nil
 	if isBlock {
 		return &csi.NodeExpandVolumeResponse{
 			CapacityBytes: sizeInByte}, nil
-	}
-
-	volumeMountPath := ns.getVolumeMountPath(volumeId)
-	if volumeMountPath == "" {
-		return nil, status.Error(codes.Internal, "Can't get volume mount path")
 	}
 
 	ok, err := mount.NewResizeFs(ns.Mounter.Exec).Resize(volumeMountPath, volumePath)

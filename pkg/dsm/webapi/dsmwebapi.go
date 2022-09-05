@@ -23,6 +23,7 @@ type DSM struct {
 	Password string
 	Sid      string
 	Https    bool
+	Controller string //new
 }
 
 type errData struct {
@@ -43,7 +44,7 @@ type Response struct {
 
 func (dsm *DSM) sendRequest(data string, apiTemplate interface{}, params url.Values, cgiPath string) (Response, error) {
 	resp, err := dsm.sendRequestWithoutConnectionCheck(data, apiTemplate, params, cgiPath)
-	if err != nil && resp.ErrorCode == 119 { // WEBAPI_ERR_SID_NOT_FOUND
+	if err != nil && (resp.ErrorCode == 105 || resp.ErrorCode == 119) { // 105: WEBAPI_ERR_NO_PERMISSION, 119: WEBAPI_ERR_SID_NOT_FOUND
 		// Re-login
 		if err := dsm.Login(); err != nil {
 			return Response{}, fmt.Errorf("Failed to re-login to DSM: [%s]. err: %v", dsm.Ip, err)

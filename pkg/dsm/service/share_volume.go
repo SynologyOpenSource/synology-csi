@@ -184,6 +184,10 @@ func (service *DsmService) listSMBVolumes(dsmIp string) (infos []*models.K8sVolu
 			continue
 		}
 
+		if dsm.IsUC() {
+			continue
+		}
+
 		shares, err := dsm.ShareList()
 		if err != nil {
 			log.Errorf("[%s] Failed to list shares: %v", dsm.Ip, err)

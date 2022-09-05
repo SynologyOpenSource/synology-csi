@@ -29,6 +29,7 @@ const (
 )
 
 var (
+	MultipathEnabled = true
 	supportedProtocolList = []string{utils.ProtocolIscsi, utils.ProtocolSmb}
 )
 
