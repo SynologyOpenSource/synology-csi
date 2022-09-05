@@ -6,6 +6,7 @@ The official [Container Storage Interface](https://github.com/container-storage-
 Driver Name: csi.san.synology.com
 | Driver Version                                                                   | Image                                                                 | Supported K8s Version |
 | -------------------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------- |
+| [v1.1.1](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.1.1) | [synology-csi:v1.1.1](https://hub.docker.com/r/synology/synology-csi) | 1.20+                 |
 | [v1.1.0](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.1.0) | [synology-csi:v1.1.0](https://hub.docker.com/r/synology/synology-csi) | 1.20+                 |
 | [v1.0.1](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.0.1) | [synology-csi:v1.0.1](https://hub.docker.com/r/synology/synology-csi) | 1.20+                 |
 | [v1.0.0](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.0.0) | [synology-csi:v1.0.0](https://hub.docker.com/r/synology/synology-csi) | 1.19                  |
@@ -21,7 +22,9 @@ The Synology CSI driver supports:
 ## Installation
 ### Prerequisites
 - Kubernetes versions 1.19 or above
-- Synology NAS running DSM 7.0 or above
+- Synology NAS running:
+    * DSM 7.0 or above
+    * DSM UC 3.1 or above
 - Go version 1.16 or above is recommended
 - (Optional) Both [Volume Snapshot CRDs](https://github.com/kubernetes-csi/external-snapshotter/tree/v4.0.0/client/config/crd) and the [common snapshot controller](https://github.com/kubernetes-csi/external-snapshotter/tree/v4.0.0/deploy/kubernetes/snapshot-controller) must be installed in your Kubernetes cluster if you want to use the **Snapshot** feature
 
@@ -158,7 +161,7 @@ Create and apply StorageClasses with the properties you want.
     | *dsm*                                            | string | The IPv4 address of your DSM, which must be included in the `client-info.yml` for the CSI driver to log in to DSM                                                  | -       | iSCSI, SMB          |
     | *location*                                       | string | The location (/volume1, /volume2, ...) on DSM where the LUN for *PersistentVolume* will be created                                                                 | -       | iSCSI, SMB          |
     | *fsType*                                         | string | The formatting file system of the *PersistentVolumes* when you mount them on the pods. This parameter only works with iSCSI. For SMB, the fsType is always ‘cifs‘. | 'ext4'  | iSCSI               |
-    | *protocol*                                       | string | The backing storage protocol. Enter ‘iscsi’ to create LUNs or ‘smb‘ to create shared folders on DSM.                                                               | 'iscsi' | iSCSI, SMB          |
+    | *protocol*                                       | string | The storage backend protocol. Enter ‘iscsi’ to create LUNs or ‘smb‘ to create shared folders on DSM.                                                               | 'iscsi' | iSCSI, SMB          |
     | *csi.storage.k8s.io/node-stage-secret-name*      | string | The name of node-stage-secret. Required if DSM shared folder is accessed via SMB.                                                                                  | -       | SMB                 |
     | *csi.storage.k8s.io/node-stage-secret-namespace* | string | The namespace of node-stage-secret. Required if DSM shared folder is accessed via SMB.                                                                             | -       | SMB                 |
 
