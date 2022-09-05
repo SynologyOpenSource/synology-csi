@@ -29,7 +29,7 @@ var cmdShareGet = &cobra.Command{
 	Short: "get share",
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		dsm, err := LoginDsmForTest()
+		dsm, err := LoginDsmForTest(DsmId)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
@@ -52,39 +52,56 @@ var cmdShareList = &cobra.Command{
 	Short: "list shares",
 	Args:  cobra.MinimumNArgs(0),
 	Run: func(cmd *cobra.Command, args []string) {
-		dsm, err := LoginDsmForTest()
+		dsms, err := ListDsms(DsmId)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
-		defer func() {
-			dsm.Logout()
-		}()
 
-		shares, err := dsm.ShareList()
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+		shareInfos := make(map[string][]webapi.ShareInfo)
+		for _, dsm := range dsms {
+			if err := dsm.Login(); err != nil {
+				fmt.Printf("Failed to login to DSM: [%s]. err: %v\n", dsm.Ip, err)
+				os.Exit(1)
+			}
+			shares, err := dsm.ShareList()
+			if err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
+			shareInfos[dsm.Ip] = shares
+			dsm.Logout()
 		}
 
 		tw := tabwriter.NewWriter(os.Stdout, 8, 0, 2, ' ', 0)
-
-		fmt.Fprintf(tw, "%s\t%-32s\t%-10s\t%-64s\t%s\t%s\t%s\t%s\t%-10s\t%s\t%s\n",
-			"id:", "Name:", "VolPath", "Desc:", "Quota(MB):", "ShareCow:", "RecycleBin:", "RBAdminOnly:", "Encryption:", "CanSnap:", "Uuid:")
-		for i, info := range shares {
-			fmt.Fprintf(tw, "%d\t%-32s\t", i, info.Name)
-			fmt.Fprintf(tw, "%-10s\t", info.VolPath)
-			fmt.Fprintf(tw, "%-64s\t", info.Desc)
-			fmt.Fprintf(tw, "%d\t", info.QuotaValueInMB)
-			fmt.Fprintf(tw, "%v\t", info.EnableShareCow)
-			fmt.Fprintf(tw, "%v\t", info.EnableRecycleBin)
-			fmt.Fprintf(tw, "%v\t", info.RecycleBinAdminOnly)
-			fmt.Fprintf(tw, "%-10d\t", info.Encryption)
-			fmt.Fprintf(tw, "%v\t", info.SupportSnapshot)
-			fmt.Fprintf(tw, "%s\t", info.Uuid)
-			fmt.Fprintf(tw, "\n")
-
-			_ = tw.Flush()
+		fmt.Fprintf(tw, "%-16s\t", "Host:")
+		fmt.Fprintf(tw, "%-32s\t", "Name:")
+		fmt.Fprintf(tw, "%-36s\t", "Uuid:")
+		fmt.Fprintf(tw, "%-10s\t", "VolPath:")
+		fmt.Fprintf(tw, "%-64s\t", "Desc:")
+		fmt.Fprintf(tw, "%-12s\t", "Quota(MB):")
+		fmt.Fprintf(tw, "%s\t", "Cow:")
+		fmt.Fprintf(tw, "%s\t", "RecycleBin:")
+		fmt.Fprintf(tw, "%s\t", "RBAdminOnly:")
+		fmt.Fprintf(tw, "%-10s\t", "Encryption:")
+		fmt.Fprintf(tw, "%s\t", "CanSnap:")
+		fmt.Fprintf(tw, "\n")
+		for ip, v := range shareInfos {
+			for _, info := range v {
+				fmt.Fprintf(tw, "%-16s\t", ip)
+				fmt.Fprintf(tw, "%-32s\t", info.Name)
+				fmt.Fprintf(tw, "%-36s\t", info.Uuid)
+				fmt.Fprintf(tw, "%-10s\t", info.VolPath)
+				fmt.Fprintf(tw, "%-64s\t", info.Desc)
+				fmt.Fprintf(tw, "%-12d\t", info.QuotaValueInMB)
+				fmt.Fprintf(tw, "%v\t", info.EnableShareCow)
+				fmt.Fprintf(tw, "%v\t", info.EnableRecycleBin)
+				fmt.Fprintf(tw, "%v\t", info.RecycleBinAdminOnly)
+				fmt.Fprintf(tw, "%-10d\t", info.Encryption)
+				fmt.Fprintf(tw, "%v\t", info.SupportSnapshot)
+				fmt.Fprintf(tw, "\n")
+				_ = tw.Flush()
+			}
 		}
 
 		fmt.Printf("Success, ShareList()\n")
@@ -96,7 +113,7 @@ var cmdShareCreate = &cobra.Command{
 	Short: "create share",
 	Args:  cobra.MinimumNArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
-		dsm, err := LoginDsmForTest()
+		dsm, err := LoginDsmForTest(DsmId)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
@@ -150,7 +167,7 @@ var cmdShareDelete = &cobra.Command{
 	Short: "delete share",
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		dsm, err := LoginDsmForTest()
+		dsm, err := LoginDsmForTest(DsmId)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
@@ -173,7 +190,7 @@ var cmdShareClone = &cobra.Command{
 	Short: "clone share",
 	Args:  cobra.MinimumNArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
-		dsm, err := LoginDsmForTest()
+		dsm, err := LoginDsmForTest(DsmId)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
@@ -264,7 +281,7 @@ var cmdShareSnapshotCreate = &cobra.Command{
 	Short: "create share snapshot (only share located in btrfs volume can take snapshots)",
 	Args:  cobra.MinimumNArgs(3),
 	Run: func(cmd *cobra.Command, args []string) {
-		dsm, err := LoginDsmForTest()
+		dsm, err := LoginDsmForTest(DsmId)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
@@ -310,7 +327,7 @@ var cmdShareSnapshotDelete = &cobra.Command{
 	Short: "delete share snapshot",
 	Args:  cobra.MinimumNArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
-		dsm, err := LoginDsmForTest()
+		dsm, err := LoginDsmForTest(DsmId)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
@@ -356,7 +373,7 @@ var cmdShareSnapshotList = &cobra.Command{
 	Short: "list share snapshots",
 	Args:  cobra.MinimumNArgs(0),
 	Run: func(cmd *cobra.Command, args []string) {
-		dsm, err := LoginDsmForTest()
+		dsm, err := LoginDsmForTest(DsmId)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
@@ -428,7 +445,7 @@ var cmdSharePermissionList = &cobra.Command{
 	Short: "list permissions",
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		dsm, err := LoginDsmForTest()
+		dsm, err := LoginDsmForTest(DsmId)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
@@ -473,7 +490,7 @@ var cmdSharePermissionSet = &cobra.Command{
 	Short: "set permission",
 	Args:  cobra.MinimumNArgs(3),
 	Run: func(cmd *cobra.Command, args []string) {
-		dsm, err := LoginDsmForTest()
+		dsm, err := LoginDsmForTest(DsmId)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
@@ -518,7 +535,7 @@ var cmdShareSet = &cobra.Command{
 	Short: "share set (only share located in btrfs volume can be resized)",
 	Args:  cobra.MinimumNArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
-		dsm, err := LoginDsmForTest()
+		dsm, err := LoginDsmForTest(DsmId)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
