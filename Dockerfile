@@ -6,8 +6,13 @@ LABEL stage=synobuilder
 
 RUN apk add --no-cache alpine-sdk
 WORKDIR /go/src/synok8scsiplugin
-COPY . .
 ARG TARGETPLATFORM
+
+COPY go.mod .
+COPY go.sum .
+COPY Makefile .
+COPY main.go .
+COPY pkg ./pkg
 
 RUN env GOARCH=$(echo "$TARGETPLATFORM" | cut -f2 -d/) \
         GOARM=$(echo "$TARGETPLATFORM" | cut -f3 -d/ | cut -c2-) \
