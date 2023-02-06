@@ -79,7 +79,7 @@ func NewControllerAndNodeDriver(nodeID string, endpoint string, dsmService inter
 	d.addNodeServiceCapabilities([]csi.NodeServiceCapability_RPC_Type{
 		csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
 		csi.NodeServiceCapability_RPC_EXPAND_VOLUME,
-		csi.NodeServiceCapability_RPC_VOLUME_MOUNT_GROUP,
+		// csi.NodeServiceCapability_RPC_VOLUME_MOUNT_GROUP,
 		// csi.NodeServiceCapability_RPC_GET_VOLUME_STATS, //TODO
 	})
 
