@@ -8,21 +8,21 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"github.com/SynologyOpenSource/synology-csi/pkg/logger"
 	log "github.com/sirupsen/logrus"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
-	"github.com/SynologyOpenSource/synology-csi/pkg/logger"
 )
 
 type DSM struct {
-	Ip       string
-	Port     int
-	Username string
-	Password string
-	Sid      string
-	Https    bool
+	Ip         string
+	Port       int
+	Username   string
+	Password   string
+	Sid        string
+	Https      bool
 	Controller string //new
 }
 
@@ -50,7 +50,7 @@ func (dsm *DSM) sendRequest(data string, apiTemplate interface{}, params url.Val
 			return Response{}, fmt.Errorf("Failed to re-login to DSM: [%s]. err: %v", dsm.Ip, err)
 		}
 		log.Info("Re-login succeeded.")
-		return dsm.sendRequestWithoutConnectionCheck(data, apiTemplate, params, cgiPath);
+		return dsm.sendRequestWithoutConnectionCheck(data, apiTemplate, params, cgiPath)
 	}
 
 	return resp, err
@@ -106,7 +106,7 @@ func (dsm *DSM) sendRequestWithoutConnectionCheck(data string, apiTemplate inter
 	// For debug print text body
 	var bodyText []byte
 	if logger.WebapiDebug {
-		bodyText, err = ioutil.ReadAll(resp.Body)
+		bodyText, err = io.ReadAll(resp.Body)
 		if err != nil {
 			return Response{}, err
 		}

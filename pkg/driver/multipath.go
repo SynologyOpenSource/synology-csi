@@ -22,11 +22,11 @@ import (
 	"context"
 	"fmt"
 	log "github.com/sirupsen/logrus"
+	utilexec "k8s.io/utils/exec"
 	"os"
 	"regexp"
 	"strings"
 	"time"
-	utilexec "k8s.io/utils/exec"
 )
 
 func IsMultipathEnabled() bool {
@@ -72,7 +72,7 @@ func execWithTimeout(command string, args []string, timeout time.Duration) ([]by
 	if err != nil {
 		if ee, ok := err.(utilexec.ExitError); ok {
 			log.Errorf("Non-zero exit code: %s", err)
-			err = fmt.Errorf("%s", ee.ExitStatus())
+			err = fmt.Errorf("%d", ee.ExitStatus())
 		}
 	}
 
