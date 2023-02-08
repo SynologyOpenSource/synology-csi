@@ -1,10 +1,27 @@
-// Copyright 2021 Synology Inc.
+/*
+Copyright 2021 Synology Inc.
+
+Copyright 2017 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 
 package driver
 
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	log "github.com/sirupsen/logrus"
@@ -14,6 +31,14 @@ import (
 type initiatorDriver struct {
 	chapUser string
 	chapPassword string
+}
+
+type iscsiSession struct {
+	Protocol string
+	Id       int32
+	Portal   string
+	Iqn      string
+	Name     string
 }
 
 const (
@@ -26,7 +51,37 @@ func iscsiadm(cmdArgs ...string) utilexec.Cmd {
 	return executor.Command("iscsiadm", cmdArgs...)
 }
 
-func iscsiadm_session() string {
+// parseSession takes the raw stdout from the `iscsiadm -m session` command and encodes it into an iSCSI session type
+func parseSessions(lines string) []iscsiSession {
+	entries := strings.Split(strings.TrimSpace(lines), "\n")
+	r := strings.NewReplacer("[", "",
+		"]", "")
+
+	var sessions []iscsiSession
+	for _, entry := range entries {
+		e := strings.Fields(entry)
+		if len(e) < 4 {
+			continue
+		}
+		protocol := strings.Split(e[0], ":")[0]
+		id := r.Replace(e[1])
+		id64, _ := strconv.ParseInt(id, 10, 32)
+		portal := strings.Split(e[2], ",")[0]
+
+		s := iscsiSession{
+			Protocol: protocol,
+			Id:       int32(id64),
+			Portal:   portal,
+			Iqn:      e[3],
+			Name:     strings.Split(e[3], ":")[1],
+		}
+		sessions = append(sessions, s)
+	}
+
+	return sessions
+}
+
+func iscsiadm_session() []iscsiSession {
 	cmd := iscsiadm("-m", "session")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -36,17 +91,17 @@ func iscsiadm_session() string {
 		} else {
 			log.Errorf("Failed to run iscsiadm session: %v", err)
 		}
-		return ""
+		return []iscsiSession{}
 	}
 
-	return string(out)
+	return parseSessions(string(out))
 }
 
-func iscsiadm_discovery(ip string) error {
+func iscsiadm_discovery(portal string) error {
 	cmd := iscsiadm(
 		"-m", "discoverydb",
 		"--type", "sendtargets",
-		"--portal", ip,
+		"--portal", portal,
 		"--discover")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -90,11 +145,11 @@ func iscsiadm_rescan(iqn string) error {
 	return nil
 }
 
-func hasSession(targetIqn string) bool{
-	sessions := iscsiadm_session();
+func hasSession(targetIqn string, portal string) bool {
+	sessions := iscsiadm_session()
 
-	for _, line := range strings.Split(sessions, "\n") {
-		if strings.Contains(line, targetIqn) {
+	for _, s := range sessions {
+		if targetIqn == s.Iqn && (portal == s.Portal || portal == "") {
 			return true
 		}
 	}
@@ -102,15 +157,25 @@ func hasSession(targetIqn string) bool{
 	return false
 }
 
-func (d *initiatorDriver) login(targetIqn string, ip string) error{
-	portal := fmt.Sprintf("%s:%d", ip, ISCSIPort)
+func listSessionsByIqn(targetIqn string) (matchedSessions []iscsiSession) {
+	sessions := iscsiadm_session()
 
-	if (hasSession(targetIqn)) {
+	for _, s := range sessions {
+		if targetIqn == s.Iqn {
+			matchedSessions = append(matchedSessions, s)
+		}
+	}
+
+	return matchedSessions
+}
+
+func (d *initiatorDriver) login(targetIqn string, portal string) error{
+	if (hasSession(targetIqn, portal)) {
 		log.Infof("Session[%s] already exists.", targetIqn)
 		return nil
 	}
 
-	if err := iscsiadm_discovery(ip); err != nil {
+	if err := iscsiadm_discovery(portal); err != nil {
 		log.Errorf("Failed in discovery of the target: %v", err)
 		return err
 	}
@@ -126,7 +191,7 @@ func (d *initiatorDriver) login(targetIqn string, ip string) error{
 }
 
 func (d *initiatorDriver) logout(targetIqn string, ip string) error{
-	if (!hasSession(targetIqn)) {
+	if (!hasSession(targetIqn, "")) {
 		log.Infof("Session[%s] doesn't exist.", targetIqn)
 		return nil
 	}
@@ -144,7 +209,7 @@ func (d *initiatorDriver) logout(targetIqn string, ip string) error{
 }
 
 func (d *initiatorDriver) rescan(targetIqn string) error{
-	if (!hasSession(targetIqn)) {
+	if (!hasSession(targetIqn, "")) {
 		msg := fmt.Sprintf("Session[%s] doesn't exist.", targetIqn)
 		log.Error(msg)
 		return errors.New(msg)

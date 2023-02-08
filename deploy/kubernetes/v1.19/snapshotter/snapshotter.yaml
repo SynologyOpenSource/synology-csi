@@ -81,7 +81,7 @@ spec:
             capabilities:
               add: ["SYS_ADMIN"]
             allowPrivilegeEscalation: true
-          image: synology/synology-csi:v1.1.0
+          image: synology/synology-csi:v1.1.1
           args:
             - --nodeid=NotUsed
             - --endpoint=$(CSI_ENDPOINT)

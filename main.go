@@ -25,6 +25,7 @@ var (
 	// Logging
 	logLevel    = "info"
 	webapiDebug = false
+	multipathForUC = true
 )
 
 var rootCmd = &cobra.Command{
@@ -37,6 +38,10 @@ var rootCmd = &cobra.Command{
 			logLevel = "debug"
 		}
 		logger.Init(logLevel)
+
+		if !multipathForUC {
+			driver.MultipathEnabled = false
+		}
 
 		err := driverStart()
 		if err != nil {
@@ -99,6 +104,7 @@ func addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVarP(&csiClientInfoPath, "client-info", "f", csiClientInfoPath, "Path of Synology config yaml file")
 	cmd.PersistentFlags().StringVar(&logLevel, "log-level", logLevel, "Log level (debug, info, warn, error, fatal)")
 	cmd.PersistentFlags().BoolVarP(&webapiDebug, "debug", "d", webapiDebug, "Enable webapi debugging logs")
+	cmd.PersistentFlags().BoolVar(&multipathForUC, "multipath", multipathForUC, "Set to 'false' to disable multipath for UC")
 
 	cmd.MarkFlagRequired("endpoint")
 	cmd.MarkFlagRequired("client-info")
