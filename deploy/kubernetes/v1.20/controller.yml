@@ -91,7 +91,7 @@ spec:
             capabilities:
               add: ["SYS_ADMIN"]
             allowPrivilegeEscalation: true
-          image: k8s.gcr.io/sig-storage/csi-provisioner:v3.0.0
+          image: registry.k8s.io/sig-storage/csi-provisioner:v3.0.0
           args:
             - --timeout=60s
             - --csi-address=$(ADDRESS)
@@ -109,7 +109,7 @@ spec:
             capabilities:
               add: ["SYS_ADMIN"]
             allowPrivilegeEscalation: true
-          image: k8s.gcr.io/sig-storage/csi-attacher:v3.3.0
+          image: registry.k8s.io/sig-storage/csi-attacher:v3.3.0
           args:
             - --v=5
             - --csi-address=$(ADDRESS)
@@ -126,7 +126,7 @@ spec:
             capabilities:
               add: ["SYS_ADMIN"]
             allowPrivilegeEscalation: true
-          image: k8s.gcr.io/sig-storage/csi-resizer:v1.3.0
+          image: registry.k8s.io/sig-storage/csi-resizer:v1.3.0
           args:
             - --v=5
             - --csi-address=$(ADDRESS)
