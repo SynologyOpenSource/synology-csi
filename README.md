@@ -6,10 +6,7 @@ The official [Container Storage Interface](https://github.com/container-storage-
 Driver Name: csi.san.synology.com
 | Driver Version                                                                   | Image                                                                 | Supported K8s Version |
 | -------------------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------- |
-| [v1.1.1](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.1.1) | [synology-csi:v1.1.1](https://hub.docker.com/r/synology/synology-csi) | 1.20+                 |
-| [v1.1.0](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.1.0) | [synology-csi:v1.1.0](https://hub.docker.com/r/synology/synology-csi) | 1.20+                 |
-| [v1.0.1](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.0.1) | [synology-csi:v1.0.1](https://hub.docker.com/r/synology/synology-csi) | 1.20+                 |
-| [v1.0.0](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.0.0) | [synology-csi:v1.0.0](https://hub.docker.com/r/synology/synology-csi) | 1.19                  |
+| [v1.1.2](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.1.2) | [synology-csi:v1.1.2](https://hub.docker.com/r/synology/synology-csi) | 1.20+                 |
 
 
 
@@ -43,25 +40,31 @@ The Synology CSI driver supports:
     - *https*: Set "true" to use HTTPS for secure connections. Make sure the port is properly configured as well.
     - *username*, *password*: The credentials for connecting to DSM.
 
-5. Run `./scripts/deploy.sh run` to install the driver. This will be a *full* deployment, which means you'll be building and running all CSI services as well as the snapshotter. If you want a *basic* deployment, which doesn't include installing a snapshotter, change the command as instructed below.
-    - *full*:
-        `./scripts/deploy.sh run`
-    - *basic*:
-        `./scripts/deploy.sh build && ./scripts/deploy.sh install --basic`
+5. Install
+    * **YAML**
+        Run `./scripts/deploy.sh run` to install the driver. This will be a *full* deployment, which means you'll be building and running all CSI services as well as the snapshotter. If you want a *basic* deployment, which doesn't include installing a snapshotter, change the command as instructed below.
+        - *full*:
+            `./scripts/deploy.sh run`
+        - *basic*:
+            `./scripts/deploy.sh build && ./scripts/deploy.sh install --basic`
 
-    If you don’t need to build the driver locally and want to pull the [image](https://hub.docker.com/r/synology/synology-csi) from Docker instead, run the command as instructed below.
+        If you don’t need to build the driver locally and want to pull the [image](https://hub.docker.com/r/synology/synology-csi) from Docker instead, run the command as instructed below.
 
-    - *full*:
-        `./scripts/deploy.sh install --all`
-    - *basic*:
-        `./scripts/deploy.sh install --basic`
+        - *full*:
+            `./scripts/deploy.sh install --all`
+        - *basic*:
+            `./scripts/deploy.sh install --basic`
 
-    Running the bash script will:
-    - Create a namespace named "`synology-csi`". This is where the driver will be installed.
-    - Create a secret named "`client-info-secret`" using the credentials from the client-info.yml you configured in the previous step.
-    - Build a local image and deploy the CSI driver.
-    - Create a **default** storage class named "`synology-iscsi-storage`" that uses the "`Retain`" policy.
-    - Create a volume snapshot class named "`synology-snapshotclass`" that uses the "`Delete`" policy. (*Full* deployment only)
+        Running the bash script will:
+        - Create a namespace named "`synology-csi`". This is where the driver will be installed.
+        - Create a secret named "`client-info-secret`" using the credentials from the client-info.yml you configured in the previous step.
+        - Build a local image and deploy the CSI driver.
+        - Create a **default** storage class named "`synology-iscsi-storage`" that uses the "`Retain`" policy.
+        - Create a volume snapshot class named "`synology-snapshotclass`" that uses the "`Delete`" policy. (*Full* deployment only)
+    * **HELM** (Local Development)
+        1. `kubectl create ns synology-csi`
+        2. `kubectl create secret -n synology-csi generic client-info-secret --from-file=./config/client-info.yml`
+        3. `cd deploy/helm; make up`
 
 6. Check if the status of all pods of the CSI driver is Running. `kubectl get pods -n synology-csi`
 
