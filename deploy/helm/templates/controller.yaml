@@ -1,0 +1,187 @@
+{{- with $.Values }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels: {{- include "synology-csi.labels" $ | nindent 4 }}
+  name: {{ include "synology-csi.fullname" $ }}-controller
+
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  labels: {{- include "synology-csi.labels" $ | nindent 4 }}
+  name: {{ include "synology-csi.fullname" $ }}-controller
+rules:
+  - apiGroups: [ "" ]
+    resources: [ "events" ]
+    verbs: [ "get", "list", "watch", "create", "update", "patch" ]
+  - apiGroups: [ "" ]
+    resources: [ "persistentvolumeclaims" ]
+    verbs: [ "get", "list", "watch", "update", "patch" ]
+  - apiGroups: [ "" ]
+    resources: [ "persistentvolumeclaims/status" ]
+    verbs: [ "get", "list", "watch", "update", "patch" ]
+  - apiGroups: [ "" ]
+    resources: [ "persistentvolumes" ]
+    verbs: [ "get", "list", "watch", "create", "update", "patch", "delete" ]
+  - apiGroups: [ "" ]
+    resources: [ "nodes", "pods" ]
+    verbs: [ "get", "list", "watch" ]
+  - apiGroups: [ "storage.k8s.io" ]
+    resources: [ "csinodes" ]
+    verbs: [ "get", "list", "watch" ]
+  - apiGroups: [ "csi.storage.k8s.io" ]
+    resources: [ "csinodeinfos" ]
+    verbs: [ "get", "list", "watch" ]
+  - apiGroups: [ "storage.k8s.io" ]
+    resources: [ "volumeattachments", "volumeattachments/status" ]
+    verbs: [ "get", "list", "watch", "update", "patch" ]
+  - apiGroups: [ "storage.k8s.io" ]
+    resources: [ "storageclasses" ]
+    verbs: [ "get", "list", "watch" ]
+  - apiGroups: [ "snapshot.storage.k8s.io" ]
+    resources: [ "volumesnapshots" ]
+    verbs: [ "get", "list" ]
+  - apiGroups: [ "snapshot.storage.k8s.io" ]
+    resources: [ "volumesnapshotcontents" ]
+    verbs: [ "get", "list" ]
+
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  labels: {{- include "synology-csi.labels" $ | nindent 4 }}
+  name: {{ include "synology-csi.fullname" $ }}-controller
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "synology-csi.fullname" $ }}-controller
+    namespace: {{ $.Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "synology-csi.fullname" $ }}-controller
+
+{{- with .controller | default (dict "dummy" true) }}
+---
+kind: StatefulSet
+apiVersion: apps/v1
+metadata:
+  labels:
+    app: controller
+    {{- include "synology-csi.labels" $ | nindent 4 }}
+  name: {{ include "synology-csi.fullname" $ }}-controller
+spec:
+  selector:
+    matchLabels:
+      app: controller
+      {{- include "synology-csi.selectorLabels" $ | nindent 6 }}
+  serviceName: {{ include "synology-csi.fullname" $ }}-controller
+  template:
+    metadata:
+      labels:
+        app: controller
+        {{- include "synology-csi.selectorLabels" $ | nindent 8 }}
+    spec:
+      {{- with .affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      {{- with $.Values.images }}
+        - name: provisioner
+          args:
+            - --csi-address=$(ADDRESS)
+            - --timeout=60s
+            - --v=5
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+          {{- with .provisioner }}
+          image: {{ .image }}:{{ .tag }}
+          imagePullPolicy: {{ .pullPolicy }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: true
+            capabilities:
+              add: [ "SYS_ADMIN" ]
+            privileged: true
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy
+        - name: attacher
+          args:
+            - --csi-address=$(ADDRESS)
+            - --v=5
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+          {{- with .attacher }}
+          image: {{ .image }}:{{ .tag }}
+          imagePullPolicy: {{ .pullPolicy }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: true
+            capabilities:
+              add: [ "SYS_ADMIN" ]
+            privileged: true
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy
+        - name: resizer
+          args:
+            - --csi-address=$(ADDRESS)
+            - --v=5
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+          {{- with .resizer }}
+          image: {{ .image }}:{{ .tag }}
+          imagePullPolicy: {{ .pullPolicy }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: true
+            capabilities:
+              add: [ "SYS_ADMIN" ]
+            privileged: true
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy
+        - name: plugin
+          args:
+            - --client-info=/etc/synology/client-info.yaml
+            - --endpoint=$(CSI_ENDPOINT)
+            - --log-level=info
+            - --nodeid=NotUsed
+          env:
+            - name: CSI_ENDPOINT
+              value: unix:///var/lib/csi/sockets/pluginproxy/csi.sock
+          {{- with .plugin }}
+          image: {{ .image }}:{{ .tag | default $.Chart.AppVersion }}
+          imagePullPolicy: {{ .pullPolicy }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: true
+            capabilities:
+              add: [ "SYS_ADMIN" ]
+            privileged: true
+          volumeMounts:
+            - name: client-info
+              mountPath: /etc/synology
+              readOnly: true
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy
+      {{- end }}
+      hostNetwork: true
+      {{- with .nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "synology-csi.fullname" $ }}-controller
+      {{- with .tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - {{ include "synology-csi.clientInfoSecretVolume" $ | nindent 10 }}
+        - name: socket-dir
+          emptyDir: { }
+{{- end }}
+{{- end }}

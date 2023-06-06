@@ -1,0 +1,12 @@
+{{- with $.Values.clientInfoSecret }}
+{{- if and .create $.Release.IsInstall }}
+---
+apiVersion: v1
+data:
+  client-info.yaml: |- {{- pick . "clients" | toYaml | b64enc | nindent 4 }}
+kind: Secret
+metadata:
+  labels: {{- include "synology-csi.labels" $ | nindent 4 }}
+  name: {{ .name | default (include "synology-csi.fullname" $ | printf "%s-client-info") }}
+{{- end }}
+{{- end }}

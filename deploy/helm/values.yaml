@@ -1,0 +1,96 @@
+---
+clientInfoSecret:
+  # How to connect to your Synology Diskstation?
+  clients:
+    - host: 192.168.1.1   # the IP address of the Diskstation
+      https: false        # whether the port expects HTTPS or not
+      password: password  # the password of the dedicated CSI user
+      port: 5000          # the port for connecting to the Diskstation Manager application
+      username: username  # the name of the dedicated CSI user
+    - host: 192.168.1.1
+      https: true
+      password: password
+      port: 5001
+      username: username
+  # Whether to create the secret if the chart gets installed or not; ignored on updates.
+  create: true
+  # Defaults to {{ include "synology-csi.fullname" $ }}-client-info if empty or not present:
+  name: ""
+# Specifies affinity, nodeSelector and tolerations for the controller StatefulSet
+controller:
+  affinity: { }
+  nodeSelector: { }
+  tolerations: [ ]
+fullnameOverride: ""
+images:
+  attacher:
+    image: k8s.gcr.io/sig-storage/csi-attacher
+    pullPolicy: IfNotPresent
+    tag: v4.2.0
+  nodeDriverRegistrar:
+    image: k8s.gcr.io/sig-storage/csi-node-driver-registrar
+    pullPolicy: IfNotPresent
+    tag: v2.6.3
+  plugin:
+    image: synology/synology-csi
+    pullPolicy: IfNotPresent
+    # Defaults to {{ $.Chart.AppVersion }} if empty or not present:
+    tag: ""
+  provisioner:
+    image: k8s.gcr.io/sig-storage/csi-provisioner
+    pullPolicy: IfNotPresent
+    tag: v3.4.0
+  resizer:
+    image: k8s.gcr.io/sig-storage/csi-resizer
+    pullPolicy: IfNotPresent
+    tag: v1.7.0
+  snapshotter:
+    image: k8s.gcr.io/sig-storage/csi-snapshotter
+    pullPolicy: IfNotPresent
+    tag: v6.2.1
+installCSIDriver: true
+nameOverride: ""
+# Specifies affinity, nodeSelector and tolerations for the node DaemonSet
+node:
+  affinity: { }
+  nodeSelector: { }
+  tolerations: [ ]
+# Specifies affinity, nodeSelector and tolerations for the snapshotter StatefulSet
+snapshotter:
+  affinity: { }
+  nodeSelector: { }
+  tolerations: [ ]
+storageClasses:
+  delete:
+    # One of true or false (default):
+    ##disabled: false
+    # One of true or false (default):
+    ##isDefault: false
+    # One of "Retain" or "Delete" (default):
+    reclaimPolicy: Delete
+    # One of "WaitForFirstConsumer" or "Immediate" (default):
+    ##volumeBindingMode: Immediate
+
+    # If not present, some location will be chosen to create volumes with the filesystem type ext4.
+    # Note that these parameters cannot get updated once deployed - any subsequent changes get ignored!
+    ##parameters:
+    ##  dsm: "1.1.1.1"
+    ##  fsType: ext4
+    ##  location: /volume1
+  retain:
+    reclaimPolicy: Retain
+volumeSnapshotClasses:
+  delete: { }
+    # One of true or false (default):
+    ##disabled: false
+    # One of "Retain" or "Delete" (default):
+    ##deletionPolicy: Delete
+    # One of true or false (default):
+    ##isDefault: false
+
+    # Note that these parameters cannot get updated once deployed - any subsequent changes get ignored!
+    ##parameters:
+    ##  description: "Kubernetes CSI"
+    ##  is_locked: "false"
+  retain:
+    deletionPolicy: Retain

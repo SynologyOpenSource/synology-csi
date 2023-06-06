@@ -1,0 +1,14 @@
+Thank you for installing {{ .Chart.Name }}.
+
+Your release is named {{ .Release.Name }}.
+
+To learn more about the release, try:
+
+    helm status {{ .Release.Name }} --namespace {{ .Release.Namespace }}
+
+or
+
+    helm get all {{ .Release.Name }} --namespace {{ .Release.Namespace }}
+
+If you want to help to improve this chart, please submit an issue or fork this repo and send a pull request to
+{{ .Chart.Home }}.

@@ -1,0 +1,161 @@
+{{- with $.Values }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels: {{- include "synology-csi.labels" $ | nindent 4 }}
+  name: {{ include "synology-csi.fullname" $ }}-node
+
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  labels: {{- include "synology-csi.labels" $ | nindent 4 }}
+  name: {{ include "synology-csi.fullname" $ }}-node
+rules:
+  - apiGroups: [ "" ]
+    resources: [ "secrets" ]
+    verbs: [ "get", "list" ]
+  - apiGroups: [ "" ]
+    resources: [ "nodes" ]
+    verbs: [ "get", "list", "update" ]
+  - apiGroups: [ "" ]
+    resources: [ "namespaces" ]
+    verbs: [ "get", "list" ]
+  - apiGroups: [ "" ]
+    resources: [ "persistentvolumes" ]
+    verbs: [ "get", "list", "watch", "update" ]
+  - apiGroups: [ "storage.k8s.io" ]
+    resources: [ "volumeattachments" ]
+    verbs: [ "get", "list", "watch", "update" ]
+
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  labels: {{- include "synology-csi.labels" $ | nindent 4 }}
+  name: {{ include "synology-csi.fullname" $ }}-node
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "synology-csi.fullname" $ }}-node
+    namespace: {{ $.Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "synology-csi.fullname" $ }}-node
+
+{{- with .node | default (dict "dummy" true) }}
+---
+kind: DaemonSet
+apiVersion: apps/v1
+metadata:
+  labels:
+    app: node
+    {{- include "synology-csi.labels" $ | nindent 4 }}
+  name: {{ include "synology-csi.fullname" $ }}-node
+spec:
+  selector:
+    matchLabels:
+      app: node
+      {{- include "synology-csi.selectorLabels" $ | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app: node
+        {{- include "synology-csi.selectorLabels" $ | nindent 8 }}
+    spec:
+      {{- with .affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      {{- with $.Values.images }}
+        - name: node-driver-registrar
+          args:
+            - --csi-address=$(ADDRESS)
+            - --kubelet-registration-path=$(REGISTRATION_PATH)
+            - --v=5
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: REGISTRATION_PATH
+              value: /var/lib/kubelet/plugins/csi.san.synology.com/csi.sock
+          {{- with .nodeDriverRegistrar }}
+          image: {{ .image }}:{{ .tag }}
+          imagePullPolicy: {{ .pullPolicy }}
+          {{- end }}
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+        - name: plugin
+          args:
+            - --client-info=/etc/synology/client-info.yaml
+            - --endpoint=$(CSI_ENDPOINT)
+            - --log-level=info
+            - --nodeid=$(KUBE_NODE_NAME)
+          env:
+            - name: CSI_ENDPOINT
+              value: unix://csi/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          {{- with .plugin }}
+          image: {{ .image }}:{{ .tag | default $.Chart.AppVersion }}
+          imagePullPolicy: {{ .pullPolicy }}
+          {{- end }}
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: client-info
+              mountPath: /etc/synology
+              readOnly: true
+            - name: device-dir
+              mountPath: /dev
+            - name: host-root
+              mountPath: /host
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: Bidirectional
+            - name: plugin-dir
+              mountPath: /csi
+      {{- end }}
+      hostNetwork: true
+      {{- with .nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "synology-csi.fullname" $ }}-node
+      {{- with .tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - {{ include "synology-csi.clientInfoSecretVolume" $ | nindent 10 }}
+        - name: device-dir
+          hostPath:
+            path: /dev
+            type: Directory
+        - name: host-root
+          hostPath:
+            path: /
+            type: Directory
+        - name: kubelet-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/csi.san.synology.com
+            type: DirectoryOrCreate
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+{{- end }}
+{{- end }}
