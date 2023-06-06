@@ -94,9 +94,9 @@ spec:
               mountPath: /csi
             - name: registration-dir
               mountPath: /registration
-        - name: plugin
+        - name: csi-plugin
           args:
-            - --client-info=/etc/synology/client-info.yaml
+            - --client-info=/etc/synology/client-info.yml
             - --endpoint=$(CSI_ENDPOINT)
             - --log-level=info
             - --nodeid=$(KUBE_NODE_NAME)

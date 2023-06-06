@@ -1,15 +1,11 @@
 apiVersion: v2
 appVersion: v1.1.1
+name: synology-csi
 description: A Helm chart for the Synology CSI Driver
-home: https://github.com/christian-schlichtherle/synology-csi-chart
 keywords:
   - Synology
   - CSI Driver
 kubeVersion: ">= 1.20.0"
-maintainers:
-  - name: Christian Schlichtherle
-    url: https://github.com/christian-schlichtherle
-name: synology-csi
 sources:
   - https://github.com/christian-schlichtherle/synology-csi-chart/tree/main
   - https://github.com/SynologyOpenSource/synology-csi/tree/main

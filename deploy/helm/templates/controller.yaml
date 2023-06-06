@@ -46,6 +46,9 @@ rules:
   - apiGroups: [ "snapshot.storage.k8s.io" ]
     resources: [ "volumesnapshotcontents" ]
     verbs: [ "get", "list" ]
+  - apiGroups: [""]
+    resources: [ "secrets" ]
+    verbs: [ "get" ]
 
 ---
 kind: ClusterRoleBinding
@@ -88,7 +91,7 @@ spec:
       {{- end }}
       containers:
       {{- with $.Values.images }}
-        - name: provisioner
+        - name: csi-provisioner
           args:
             - --csi-address=$(ADDRESS)
             - --timeout=60s
@@ -108,7 +111,7 @@ spec:
           volumeMounts:
             - name: socket-dir
               mountPath: /var/lib/csi/sockets/pluginproxy
-        - name: attacher
+        - name: csi-attacher
           args:
             - --csi-address=$(ADDRESS)
             - --v=5
@@ -127,7 +130,7 @@ spec:
           volumeMounts:
             - name: socket-dir
               mountPath: /var/lib/csi/sockets/pluginproxy
-        - name: resizer
+        - name: csi-resizer
           args:
             - --csi-address=$(ADDRESS)
             - --v=5
@@ -146,9 +149,9 @@ spec:
           volumeMounts:
             - name: socket-dir
               mountPath: /var/lib/csi/sockets/pluginproxy
-        - name: plugin
+        - name: csi-plugin
           args:
-            - --client-info=/etc/synology/client-info.yaml
+            - --client-info=/etc/synology/client-info.yml
             - --endpoint=$(CSI_ENDPOINT)
             - --log-level=info
             - --nodeid=NotUsed

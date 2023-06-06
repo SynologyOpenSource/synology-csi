@@ -13,9 +13,9 @@ clientInfoSecret:
       port: 5001
       username: username
   # Whether to create the secret if the chart gets installed or not; ignored on updates.
-  create: true
+  create: false
   # Defaults to {{ include "synology-csi.fullname" $ }}-client-info if empty or not present:
-  name: ""
+  name: "client-info-secret"
 # Specifies affinity, nodeSelector and tolerations for the controller StatefulSet
 controller:
   affinity: { }
@@ -24,11 +24,11 @@ controller:
 fullnameOverride: ""
 images:
   attacher:
-    image: k8s.gcr.io/sig-storage/csi-attacher
+    image: registry.k8s.io/sig-storage/csi-attacher
     pullPolicy: IfNotPresent
     tag: v4.2.0
   nodeDriverRegistrar:
-    image: k8s.gcr.io/sig-storage/csi-node-driver-registrar
+    image: registry.k8s.io/sig-storage/csi-node-driver-registrar
     pullPolicy: IfNotPresent
     tag: v2.6.3
   plugin:
@@ -37,17 +37,17 @@ images:
     # Defaults to {{ $.Chart.AppVersion }} if empty or not present:
     tag: ""
   provisioner:
-    image: k8s.gcr.io/sig-storage/csi-provisioner
+    image: registry.k8s.io/sig-storage/csi-provisioner
     pullPolicy: IfNotPresent
     tag: v3.4.0
   resizer:
-    image: k8s.gcr.io/sig-storage/csi-resizer
+    image: registry.k8s.io/sig-storage/csi-resizer
     pullPolicy: IfNotPresent
     tag: v1.7.0
   snapshotter:
-    image: k8s.gcr.io/sig-storage/csi-snapshotter
+    image: registry.k8s.io/sig-storage/csi-snapshotter
     pullPolicy: IfNotPresent
-    tag: v6.2.1
+    tag: v4.2.1
 installCSIDriver: true
 nameOverride: ""
 # Specifies affinity, nodeSelector and tolerations for the node DaemonSet
@@ -61,13 +61,13 @@ snapshotter:
   nodeSelector: { }
   tolerations: [ ]
 storageClasses:
-  delete:
+  synology-iscsi-storage:
     # One of true or false (default):
     ##disabled: false
     # One of true or false (default):
     ##isDefault: false
     # One of "Retain" or "Delete" (default):
-    reclaimPolicy: Delete
+    reclaimPolicy: Retain
     # One of "WaitForFirstConsumer" or "Immediate" (default):
     ##volumeBindingMode: Immediate
 
@@ -77,14 +77,14 @@ storageClasses:
     ##  dsm: "1.1.1.1"
     ##  fsType: ext4
     ##  location: /volume1
-  retain:
-    reclaimPolicy: Retain
+  # synology-iscsi-storage-delete:
+  #   reclaimPolicy: Delete
 volumeSnapshotClasses:
-  delete: { }
+  synology-snapshotclass:
     # One of true or false (default):
     ##disabled: false
     # One of "Retain" or "Delete" (default):
-    ##deletionPolicy: Delete
+    deletionPolicy: Delete
     # One of true or false (default):
     ##isDefault: false
 
@@ -92,5 +92,3 @@ volumeSnapshotClasses:
     ##parameters:
     ##  description: "Kubernetes CSI"
     ##  is_locked: "false"
-  retain:
-    deletionPolicy: Retain

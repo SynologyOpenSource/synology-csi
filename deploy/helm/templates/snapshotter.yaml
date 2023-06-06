@@ -68,7 +68,7 @@ spec:
       {{- end }}
       containers:
       {{- with $.Values.images }}
-        - name: snapshotter
+        - name: csi-snapshotter
           args:
             - --csi-address=$(ADDRESS)
             - --v=5
@@ -89,7 +89,7 @@ spec:
               mountPath: /var/lib/csi/sockets/pluginproxy
         - name: plugin
           args:
-            - --client-info=/etc/synology/client-info.yaml
+            - --client-info=/etc/synology/client-info.yml
             - --endpoint=$(CSI_ENDPOINT)
             - --log-level=info
             - --nodeid=NotUsed
