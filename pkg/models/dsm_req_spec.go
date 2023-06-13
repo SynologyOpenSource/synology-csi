@@ -65,6 +65,7 @@ type NodeStageVolumeSpec struct {
 	VolumeCapability  *csi.VolumeCapability
 	Dsm               string
 	Source            string
+	FormatOptions     string
 }
 
 type ByVolumeId []*K8sVolumeRespSpec

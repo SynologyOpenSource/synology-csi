@@ -19,16 +19,17 @@ package driver
 import (
 	"context"
 	"fmt"
-	log "github.com/sirupsen/logrus"
-	"time"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
-	"google.golang.org/protobuf/types/known/timestamppb"
+	log "github.com/sirupsen/logrus"
+
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/SynologyOpenSource/synology-csi/pkg/interfaces"
 	"github.com/SynologyOpenSource/synology-csi/pkg/models"
@@ -127,6 +128,10 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Error(codes.InvalidArgument, "Unsupported volume protocol")
 	}
 
+	// not needed during CreateVolume method
+	// used only in NodeStageVolume though VolumeContext
+	formatOptions := params["formatOptions"]
+
 	spec := &models.CreateK8sVolumeSpec{
 		DsmIp:            params["dsm"],
 		K8sVolumeName:    volName,
@@ -158,18 +163,19 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	if (k8sVolume.Protocol == utils.ProtocolIscsi && k8sVolume.SizeInBytes != sizeInByte) ||
 		(k8sVolume.Protocol == utils.ProtocolSmb && utils.BytesToMB(k8sVolume.SizeInBytes) != utils.BytesToMBCeil(sizeInByte)) {
-		return nil , status.Errorf(codes.AlreadyExists, "Already existing volume name with different capacity")
+		return nil, status.Errorf(codes.AlreadyExists, "Already existing volume name with different capacity")
 	}
 
 	return &csi.CreateVolumeResponse{
 		Volume: &csi.Volume{
-			VolumeId: k8sVolume.VolumeId,
+			VolumeId:      k8sVolume.VolumeId,
 			CapacityBytes: k8sVolume.SizeInBytes,
 			ContentSource: volContentSrc,
 			VolumeContext: map[string]string{
-				"dsm":      k8sVolume.DsmIp,
-				"protocol": k8sVolume.Protocol,
-				"source":   k8sVolume.Source,
+				"dsm":           k8sVolume.DsmIp,
+				"protocol":      k8sVolume.Protocol,
+				"source":        k8sVolume.Source,
+				"formatOptions": formatOptions,
 			},
 		},
 	}, nil
@@ -273,7 +279,7 @@ func (cs *controllerServer) ListVolumes(ctx context.Context, req *csi.ListVolume
 	}
 
 	return &csi.ListVolumesResponse{
-		Entries: entries,
+		Entries:   entries,
 		NextToken: nextToken,
 	}, nil
 }
@@ -339,11 +345,11 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 		}
 		return &csi.CreateSnapshotResponse{
 			Snapshot: &csi.Snapshot{
-				SizeBytes: orgSnap.SizeInBytes,
-				SnapshotId: orgSnap.Uuid,
+				SizeBytes:      orgSnap.SizeInBytes,
+				SnapshotId:     orgSnap.Uuid,
 				SourceVolumeId: orgSnap.ParentUuid,
-				CreationTime: timestamppb.New(time.Unix(orgSnap.CreateTime, 0)),
-				ReadyToUse: (orgSnap.Status == "Healthy"),
+				CreationTime:   timestamppb.New(time.Unix(orgSnap.CreateTime, 0)),
+				ReadyToUse:     (orgSnap.Status == "Healthy"),
 			},
 		}, nil
 	}
@@ -365,11 +371,11 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 
 	return &csi.CreateSnapshotResponse{
 		Snapshot: &csi.Snapshot{
-			SizeBytes: snapshot.SizeInBytes,
-			SnapshotId: snapshot.Uuid,
+			SizeBytes:      snapshot.SizeInBytes,
+			SnapshotId:     snapshot.Uuid,
 			SourceVolumeId: snapshot.ParentUuid,
-			CreationTime: timestamppb.New(time.Unix(snapshot.CreateTime, 0)),
-			ReadyToUse: (snapshot.Status == "Healthy"),
+			CreationTime:   timestamppb.New(time.Unix(snapshot.CreateTime, 0)),
+			ReadyToUse:     (snapshot.Status == "Healthy"),
 		},
 	}, nil
 }
@@ -405,7 +411,7 @@ func (cs *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnap
 	pagingSkip := ("" != startingToken)
 	var snapshots []*models.K8sSnapshotRespSpec
 
-	if (srcVolId != "") {
+	if srcVolId != "" {
 		snapshots = cs.dsmService.ListSnapshots(srcVolId)
 	} else {
 		snapshots = cs.dsmService.ListAllSnapshots()
@@ -433,11 +439,11 @@ func (cs *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnap
 		}
 		entries = append(entries, &csi.ListSnapshotsResponse_Entry{
 			Snapshot: &csi.Snapshot{
-				SizeBytes: snapshot.SizeInBytes,
-				SnapshotId: snapshot.Uuid,
+				SizeBytes:      snapshot.SizeInBytes,
+				SnapshotId:     snapshot.Uuid,
 				SourceVolumeId: snapshot.ParentUuid,
-				CreationTime: timestamppb.New(time.Unix(snapshot.CreateTime, 0)),
-				ReadyToUse: (snapshot.Status == "Healthy"),
+				CreationTime:   timestamppb.New(time.Unix(snapshot.CreateTime, 0)),
+				ReadyToUse:     (snapshot.Status == "Healthy"),
 			},
 		})
 
@@ -449,7 +455,7 @@ func (cs *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnap
 	}
 
 	return &csi.ListSnapshotsResponse{
-		Entries: entries,
+		Entries:   entries,
 		NextToken: nextToken,
 	}, nil
 }
@@ -474,7 +480,7 @@ func (cs *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 	}
 
 	return &csi.ControllerExpandVolumeResponse{
-		CapacityBytes: k8sVolume.SizeInBytes,
+		CapacityBytes:         k8sVolume.SizeInBytes,
 		NodeExpansionRequired: (k8sVolume.Protocol == utils.ProtocolIscsi),
 	}, nil
 }

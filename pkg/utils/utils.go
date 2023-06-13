@@ -50,6 +50,10 @@ func StringToBoolean(value string) bool {
 	return value == "yes" || value == "true" || value == "1"
 }
 
+func StringToSlice(value string) []string {
+	return strings.Fields(value)
+}
+
 // Haven't supported IPv6 yet.
 func LookupIPv4(name string) ([]string, error) {
 	ips, _ := net.LookupIP(name)
