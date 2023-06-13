@@ -116,9 +116,10 @@ Create and apply StorageClasses with the properties you want.
       name: synostorage
     provisioner: csi.san.synology.com
     parameters:
-      fsType: 'ext4'
+      fsType: 'btrfs'
       dsm: '192.168.1.1'
       location: '/volume1'
+      formatOptions: '--nodiscard'
     reclaimPolicy: Retain
     allowVolumeExpansion: true
     ```
