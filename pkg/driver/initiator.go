@@ -123,6 +123,21 @@ func iscsiadm_login(iqn, portal string) error {
 	return nil
 }
 
+func iscsiadm_update_node_startup(iqn, portal string) error {
+	cmd := iscsiadm(
+		"-m", "node",
+		"--targetname", iqn,
+		"--portal", portal,
+		"--op", "update",
+		"--name", "node.startup",
+		"--value", "manual")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s (%v)", string(out), err)
+	}
+	return nil
+}
+
 func iscsiadm_logout(iqn string) error {
 	cmd := iscsiadm(
 		"-m", "node",
@@ -183,6 +198,10 @@ func (d *initiatorDriver) login(targetIqn string, portal string) error{
 	if err := iscsiadm_login(targetIqn, portal); err != nil {
 		log.Errorf("Failed in login of the target: %v", err)
 		return err
+	}
+
+	if err := iscsiadm_update_node_startup(targetIqn, portal); err != nil {
+		log.Warnf("Failed to update target node.startup to manual: %v", err)
 	}
 
 	log.Infof("Login target portal [%s], iqn [%s].", portal, targetIqn)
