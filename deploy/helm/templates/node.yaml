@@ -147,15 +147,15 @@ spec:
             type: Directory
         - name: kubelet-dir
           hostPath:
-            path: /var/lib/kubelet
+            path: {{ .kubeletPath }}
             type: Directory
         - name: plugin-dir
           hostPath:
-            path: /var/lib/kubelet/plugins/csi.san.synology.com
+            path: {{ .kubeletPath }}/plugins/csi.san.synology.com
             type: DirectoryOrCreate
         - name: registration-dir
           hostPath:
-            path: /var/lib/kubelet/plugins_registry
+            path: {{ .kubeletPath }}/plugins_registry
             type: Directory
 {{- end }}
 {{- end }}
