@@ -82,7 +82,7 @@ spec:
                 fieldRef:
                   fieldPath: spec.nodeName
             - name: REGISTRATION_PATH
-              value: /var/lib/kubelet/plugins/csi.san.synology.com/csi.sock
+              value: {{ $.Values.node.kubeletPath }}/plugins/csi.san.synology.com/csi.sock
           {{- with .nodeDriverRegistrar }}
           image: {{ .image }}:{{ .tag }}
           imagePullPolicy: {{ .pullPolicy }}
@@ -122,7 +122,7 @@ spec:
             - name: host-root
               mountPath: /host
             - name: kubelet-dir
-              mountPath: /var/lib/kubelet
+              mountPath: {{ $.Values.node.kubeletPath }}
               mountPropagation: Bidirectional
             - name: plugin-dir
               mountPath: /csi
