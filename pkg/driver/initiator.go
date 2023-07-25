@@ -29,7 +29,7 @@ import (
 )
 
 type initiatorDriver struct {
-	chapUser string
+	chapUser     string
 	chapPassword string
 }
 
@@ -123,6 +123,21 @@ func iscsiadm_login(iqn, portal string) error {
 	return nil
 }
 
+func iscsiadm_update_node_startup(iqn, portal string) error {
+	cmd := iscsiadm(
+		"-m", "node",
+		"--targetname", iqn,
+		"--portal", portal,
+		"--op", "update",
+		"--name", "node.startup",
+		"--value", "manual")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s (%v)", string(out), err)
+	}
+	return nil
+}
+
 func iscsiadm_logout(iqn string) error {
 	cmd := iscsiadm(
 		"-m", "node",
@@ -169,8 +184,8 @@ func listSessionsByIqn(targetIqn string) (matchedSessions []iscsiSession) {
 	return matchedSessions
 }
 
-func (d *initiatorDriver) login(targetIqn string, portal string) error{
-	if (hasSession(targetIqn, portal)) {
+func (d *initiatorDriver) login(targetIqn string, portal string) error {
+	if hasSession(targetIqn, portal) {
 		log.Infof("Session[%s] already exists.", targetIqn)
 		return nil
 	}
@@ -185,13 +200,17 @@ func (d *initiatorDriver) login(targetIqn string, portal string) error{
 		return err
 	}
 
+	if err := iscsiadm_update_node_startup(targetIqn, portal); err != nil {
+		log.Warnf("Failed to update target node.startup to manual: %v", err)
+	}
+
 	log.Infof("Login target portal [%s], iqn [%s].", portal, targetIqn)
 
 	return nil
 }
 
-func (d *initiatorDriver) logout(targetIqn string, ip string) error{
-	if (!hasSession(targetIqn, "")) {
+func (d *initiatorDriver) logout(targetIqn string, ip string) error {
+	if !hasSession(targetIqn, "") {
 		log.Infof("Session[%s] doesn't exist.", targetIqn)
 		return nil
 	}
@@ -208,8 +227,8 @@ func (d *initiatorDriver) logout(targetIqn string, ip string) error{
 	return nil
 }
 
-func (d *initiatorDriver) rescan(targetIqn string) error{
-	if (!hasSession(targetIqn, "")) {
+func (d *initiatorDriver) rescan(targetIqn string) error {
+	if !hasSession(targetIqn, "") {
 		msg := fmt.Sprintf("Session[%s] doesn't exist.", targetIqn)
 		log.Error(msg)
 		return errors.New(msg)
