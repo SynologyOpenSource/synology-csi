@@ -12,6 +12,7 @@ type CreateK8sVolumeSpec struct {
 	DsmIp            string
 	K8sVolumeName    string
 	LunName          string
+	LunDescription	 string
 	ShareName        string
 	Location         string
 	Size             int64
