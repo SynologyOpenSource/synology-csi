@@ -29,6 +29,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"golang.org/x/sys/unix"
 	"k8s.io/mount-utils"
 
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/webapi"
@@ -584,14 +585,39 @@ func (ns *nodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 		}, nil
 	}
 
-	lun := k8sVolume.Lun
+	// If we are dealing with a LUN use statfs
+	statfs := &unix.Statfs_t{}
+	err = unix.Statfs(volumePath, statfs)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get fs info on path %s: %v", req.VolumePath, err)
+	}
+
+	// Available is blocks available * fragment size
+	available := int64(statfs.Bavail) * int64(statfs.Bsize)
+
+	// Capacity is total block count * fragment size
+	capacity := int64(statfs.Blocks) * int64(statfs.Bsize)
+
+	// Usage is block being used * fragment size (aka block size).
+	usage := (int64(statfs.Blocks) - int64(statfs.Bfree)) * int64(statfs.Bsize)
+
+	inodes := int64(statfs.Files)
+	inodesFree := int64(statfs.Ffree)
+	inodesUsed := inodes - inodesFree
+
 	return &csi.NodeGetVolumeStatsResponse{
 		Usage: []*csi.VolumeUsage{
-			&csi.VolumeUsage{
-				Available: int64(lun.Size - lun.Used),
-				Total:     int64(lun.Size),
-				Used:      int64(lun.Used),
+			{
 				Unit:      csi.VolumeUsage_BYTES,
+				Available: available,
+				Total:     capacity,
+				Used:      usage,
+			},
+			{
+				Unit:      csi.VolumeUsage_INODES,
+				Available: inodesFree,
+				Total:     inodes,
+				Used:      inodesUsed,
 			},
 		},
 	}, nil
