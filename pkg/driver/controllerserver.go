@@ -132,10 +132,20 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	// used only in NodeStageVolume though VolumeContext
 	formatOptions := params["formatOptions"]
 
+	lunDescription := ""
+	if _, ok := params["csi.storage.k8s.io/pvc/name"]; ok {
+		// if the /pvc/name is present, the namespace is present too
+		// as these parameters are reserved by external-provisioner
+		pvcNamespace := params["csi.storage.k8s.io/pvc/namespace"]
+		pvcName := params["csi.storage.k8s.io/pvc/name"]
+		lunDescription = pvcNamespace + "/" + pvcName
+	}
+
 	spec := &models.CreateK8sVolumeSpec{
 		DsmIp:            params["dsm"],
 		K8sVolumeName:    volName,
 		LunName:          models.GenLunName(volName),
+		LunDescription:   lunDescription,
 		ShareName:        models.GenShareName(volName),
 		Location:         params["location"],
 		Size:             sizeInByte,

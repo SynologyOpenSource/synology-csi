@@ -168,7 +168,7 @@ func (service *DsmService) createMappingTarget(dsm *webapi.DSM, spec *models.Cre
 	}
 	targetSpec := webapi.TargetCreateSpec{
 		Name: spec.TargetName,
-		Iqn: genTargetIqn(),
+		Iqn:  genTargetIqn(),
 	}
 
 	log.Debugf("TargetCreate spec: %v", targetSpec)
@@ -224,10 +224,11 @@ func (service *DsmService) createVolumeByDsm(dsm *webapi.DSM, spec *models.Creat
 
 	// 3. Create LUN
 	lunSpec := webapi.LunCreateSpec{
-		Name:     spec.LunName,
-		Location: spec.Location,
-		Size:     spec.Size,
-		Type:     lunType,
+		Name:        spec.LunName,
+		Description: spec.LunDescription,
+		Location:    spec.Location,
+		Size:        spec.Size,
+		Type:        lunType,
 	}
 
 	log.Debugf("LunCreate spec: %v", lunSpec)
