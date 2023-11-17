@@ -22,7 +22,7 @@ The Synology CSI driver supports:
 - Synology NAS running:
     * DSM 7.0 or above
     * DSM UC 3.1 or above
-- Go version 1.16 or above is recommended
+- Go version 1.21 or above is recommended
 - (Optional) Both [Volume Snapshot CRDs](https://github.com/kubernetes-csi/external-snapshotter/tree/v4.0.0/client/config/crd) and the [common snapshot controller](https://github.com/kubernetes-csi/external-snapshotter/tree/v4.0.0/deploy/kubernetes/snapshot-controller) must be installed in your Kubernetes cluster if you want to use the **Snapshot** feature
 
 ### Notice
