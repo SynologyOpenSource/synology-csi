@@ -11,7 +11,7 @@ GOARCH:=amd64
 endif
 GOARM?=""
 BUILD_ENV=CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) GOARM=$(GOARM)
-BUILD_FLAGS="-extldflags \"-static\""
+BUILD_FLAGS="-s -w -extldflags \"-static\""
 
 .PHONY: all clean synology-csi-driver synocli test docker-build
 
