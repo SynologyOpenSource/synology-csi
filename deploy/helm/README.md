@@ -27,9 +27,9 @@ issues and to benefit from the advanced resource management features of Helm.
 
 ## Usage
 
-Once Helm has been set up correctly, add the repo as follows:
+Once Helm has been set up correctly (with [helm-git](https://github.com/aslafy-z/helm-git) plugin), add the repo as follows:
 
-    helm repo add synology-csi-chart https://christian-schlichtherle.github.io/synology-csi-chart
+    helm repo add synology-csi-chart 'git+https://github.com/SynologyOpenSource/synology-csi@deploy/helm?ref=main'er
 
 If you had already added this repo earlier, run `helm repo update` to retrieve the latest versions of the packages.
 You can then run `helm search repo synology-csi-chart` to see the charts.
