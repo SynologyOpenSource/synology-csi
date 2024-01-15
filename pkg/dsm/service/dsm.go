@@ -222,6 +222,22 @@ func (service *DsmService) createVolumeByDsm(dsm *webapi.DSM, spec *models.Creat
 			status.Errorf(codes.InvalidArgument, fmt.Sprintf("Unknown volume fs type: %s, location: %s", dsmVolInfo.FsType, spec.Location))
 	}
 
+	devAttribs := []webapi.LunDevAttrib{}
+	for _, attrib := range strings.Split(spec.DevAttribs,",") {
+		attrib = strings.TrimSpace(attrib)
+		if(len(attrib) < 1) { continue }
+		enabled := 1
+		if strings.HasSuffix(attrib, "-") {
+			attrib = strings.TrimSuffix(attrib,"-")
+			enabled = 0
+		}
+
+		devAttribs = append(devAttribs, webapi.LunDevAttrib{
+			DevAttrib: attrib,
+			Enable: enabled,
+		})
+	}
+
 	// 3. Create LUN
 	lunSpec := webapi.LunCreateSpec{
 		Name:        spec.LunName,
@@ -229,6 +245,7 @@ func (service *DsmService) createVolumeByDsm(dsm *webapi.DSM, spec *models.Creat
 		Location:    spec.Location,
 		Size:        spec.Size,
 		Type:        lunType,
+		DevAttribs:  devAttribs,
 	}
 
 	log.Debugf("LunCreate spec: %v", lunSpec)

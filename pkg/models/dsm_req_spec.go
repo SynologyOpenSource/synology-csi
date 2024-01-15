@@ -23,6 +23,7 @@ type CreateK8sVolumeSpec struct {
 	SourceSnapshotId string
 	SourceVolumeId   string
 	Protocol         string
+	DevAttribs       string
 }
 
 type K8sVolumeRespSpec struct {

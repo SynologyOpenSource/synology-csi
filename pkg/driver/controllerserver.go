@@ -132,6 +132,8 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	// used only in NodeStageVolume though VolumeContext
 	formatOptions := params["formatOptions"]
 
+	devAttribs := params["devAttribs"]
+
 	lunDescription := ""
 	if _, ok := params["csi.storage.k8s.io/pvc/name"]; ok {
 		// if the /pvc/name is present, the namespace is present too
@@ -156,6 +158,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		SourceSnapshotId: srcSnapshotId,
 		SourceVolumeId:   srcVolumeId,
 		Protocol:         protocol,
+		DevAttribs:       devAttribs,
 	}
 
 	// idempotency
