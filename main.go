@@ -5,11 +5,11 @@
 package main
 
 import (
+	log "github.com/sirupsen/logrus"
+	"github.com/spf13/cobra"
 	"os"
 	"os/signal"
 	"syscall"
-	"github.com/spf13/cobra"
-	log "github.com/sirupsen/logrus"
 
 	"github.com/SynologyOpenSource/synology-csi/pkg/driver"
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/common"
@@ -23,16 +23,16 @@ var (
 	csiEndpoint       = "unix:///var/lib/kubelet/plugins/" + driver.DriverName + "/csi.sock"
 	csiClientInfoPath = "/etc/synology/client-info.yml"
 	// Logging
-	logLevel    = "info"
-	webapiDebug = false
+	logLevel       = "info"
+	webapiDebug    = false
 	multipathForUC = true
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "synology-csi-driver",
-	Short: "Synology CSI Driver",
+	Use:          "synology-csi-driver",
+	Short:        "Synology CSI Driver",
 	SilenceUsage: true,
-	RunE:  func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		if webapiDebug {
 			logger.WebapiDebug = true
 			logLevel = "debug"
