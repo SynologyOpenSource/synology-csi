@@ -5,17 +5,17 @@
 package common
 
 import (
-	"io/ioutil"
-	"gopkg.in/yaml.v2"
 	log "github.com/sirupsen/logrus"
+	"gopkg.in/yaml.v2"
+	"io/ioutil"
 )
 
 type ClientInfo struct {
-	Host            string `yaml:"host"`
-	Port            int    `yaml:"port"`
-	Https           bool   `yaml:"https"`
-	Username        string `yaml:"username"`
-	Password        string `yaml:"password"`
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	Https    bool   `yaml:"https"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 type SynoInfo struct {

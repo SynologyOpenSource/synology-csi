@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	ConfigPath = "./../../config/client-info.yml"
+	ConfigPath      = "./../../config/client-info.yml"
 	SecretsFilePath = "./sanity-test-secret-file.yaml"
 )
 

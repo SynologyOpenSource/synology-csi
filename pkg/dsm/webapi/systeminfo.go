@@ -19,13 +19,13 @@ type DsmSysInfo struct {
 }
 
 type NetworkInterface struct {
-	Ifname     string `json:"ifname"`
-	Ip         string `json:"ip"`
-	Mask       string `json:"mask"`
-	Speed      int    `json:"speed"`
-	Status     string `json:"status"`
-	Type       string `json:"type"`
-	UseDhcp    bool   `json:"use_dhcp"`
+	Ifname  string `json:"ifname"`
+	Ip      string `json:"ip"`
+	Mask    string `json:"mask"`
+	Speed   int    `json:"speed"`
+	Status  string `json:"status"`
+	Type    string `json:"type"`
+	UseDhcp bool   `json:"use_dhcp"`
 }
 
 func (dsm *DSM) DsmInfoGet() (*DsmInfo, error) {
@@ -66,7 +66,6 @@ func (dsm *DSM) DsmSystemInfoGet() (*DsmSysInfo, error) {
 
 	return dsmInfo, nil
 }
-
 
 func (dsm *DSM) NetworkInterfaceList(relayNode string) ([]NetworkInterface, error) {
 	params := url.Values{}

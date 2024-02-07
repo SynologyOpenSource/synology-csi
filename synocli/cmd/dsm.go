@@ -5,10 +5,10 @@ package cmd
 
 import (
 	"fmt"
-	"os"
-	"github.com/spf13/cobra"
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/common"
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/webapi"
+	"github.com/spf13/cobra"
+	"os"
 )
 
 var https = false

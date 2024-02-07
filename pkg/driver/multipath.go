@@ -22,11 +22,11 @@ import (
 	"context"
 	"fmt"
 	log "github.com/sirupsen/logrus"
+	utilexec "k8s.io/utils/exec"
 	"os"
 	"regexp"
 	"strings"
 	"time"
-	utilexec "k8s.io/utils/exec"
 )
 
 func IsMultipathEnabled() bool {

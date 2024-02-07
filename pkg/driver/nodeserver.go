@@ -27,9 +27,9 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"golang.org/x/sys/unix"
 	"k8s.io/mount-utils"
 
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/webapi"

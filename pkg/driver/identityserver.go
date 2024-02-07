@@ -18,9 +18,9 @@ package driver
 
 import (
 	"context"
+	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"github.com/container-storage-interface/spec/lib/go/csi"
 )
 
 type identityServer struct {
