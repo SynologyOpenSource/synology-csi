@@ -29,7 +29,7 @@ var (
 	webapiDebug    = false
 	multipathForUC = true
 	// Locations is tools and directories
-	chrootDir      = "/host"
+	chrootDir      = ""
 	iscsiadmPath   = ""
 	multipathPath  = ""
 	multipathdPath = ""
