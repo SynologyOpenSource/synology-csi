@@ -8,13 +8,15 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"github.com/spf13/cobra"
+
 	log "github.com/sirupsen/logrus"
+	"github.com/spf13/cobra"
 
 	"github.com/SynologyOpenSource/synology-csi/pkg/driver"
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/common"
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/service"
 	"github.com/SynologyOpenSource/synology-csi/pkg/logger"
+	"github.com/SynologyOpenSource/synology-csi/pkg/utils/hostexec"
 )
 
 var (
@@ -23,16 +25,21 @@ var (
 	csiEndpoint       = "unix:///var/lib/kubelet/plugins/" + driver.DriverName + "/csi.sock"
 	csiClientInfoPath = "/etc/synology/client-info.yml"
 	// Logging
-	logLevel    = "info"
-	webapiDebug = false
+	logLevel       = "info"
+	webapiDebug    = false
 	multipathForUC = true
+	// Locations is tools and directories
+	chrootDir      = ""
+	iscsiadmPath   = ""
+	multipathPath  = ""
+	multipathdPath = ""
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "synology-csi-driver",
-	Short: "Synology CSI Driver",
+	Use:          "synology-csi-driver",
+	Short:        "Synology CSI Driver",
 	SilenceUsage: true,
-	RunE:  func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		if webapiDebug {
 			logger.WebapiDebug = true
 			logLevel = "debug"
@@ -72,8 +79,21 @@ func driverStart() error {
 	}
 	defer dsmService.RemoveAllDsms()
 
-	// 2. Create and Run the Driver
-	drv, err := driver.NewControllerAndNodeDriver(csiNodeID, csiEndpoint, dsmService)
+	// 2. Create command executor
+	cmdMap := map[string]string{
+		"iscsiadm":   iscsiadmPath,
+		"multipath":  multipathPath,
+		"multipathd": multipathdPath,
+	}
+	cmdExecutor, err := hostexec.New(cmdMap, chrootDir)
+	if err != nil {
+		log.Errorf("Failed to create command executor: %v", err)
+		return err
+	}
+	tools := driver.NewTools(cmdExecutor)
+
+	// 3. Create and Run the Driver
+	drv, err := driver.NewControllerAndNodeDriver(csiNodeID, csiEndpoint, dsmService, tools)
 	if err != nil {
 		log.Errorf("Failed to create driver: %v", err)
 		return err
@@ -105,6 +125,10 @@ func addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(&logLevel, "log-level", logLevel, "Log level (debug, info, warn, error, fatal)")
 	cmd.PersistentFlags().BoolVarP(&webapiDebug, "debug", "d", webapiDebug, "Enable webapi debugging logs")
 	cmd.PersistentFlags().BoolVar(&multipathForUC, "multipath", multipathForUC, "Set to 'false' to disable multipath for UC")
+	cmd.PersistentFlags().StringVar(&chrootDir, "chroot-dir", chrootDir, "Host directory to chroot into (empty disables chroot)")
+	cmd.PersistentFlags().StringVar(&iscsiadmPath, "iscsiadm-path", iscsiadmPath, "Full path of iscsiadm executable")
+	cmd.PersistentFlags().StringVar(&multipathPath, "multipath-path", multipathPath, "Full path of multipath executable")
+	cmd.PersistentFlags().StringVar(&multipathdPath, "multipathd-path", multipathdPath, "Full path of multipathd executable")
 
 	cmd.MarkFlagRequired("endpoint")
 	cmd.MarkFlagRequired("client-info")

@@ -11,10 +11,11 @@ import (
 	"github.com/SynologyOpenSource/synology-csi/pkg/driver"
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/common"
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/service"
+	"github.com/SynologyOpenSource/synology-csi/pkg/utils/hostexec"
 )
 
 const (
-	ConfigPath = "./../../config/client-info.yml"
+	ConfigPath      = "./../../config/client-info.yml"
 	SecretsFilePath = "./sanity-test-secret-file.yaml"
 )
 
@@ -58,8 +59,14 @@ func TestSanity(t *testing.T) {
 	}
 	defer dsmService.RemoveAllDsms()
 
+	cmdExecutor, err := hostexec.New(nil, "")
+	if err != nil {
+		t.Fatal(fmt.Sprintf("Failed to create command executor: %v\n", err))
+	}
+	tools := driver.NewTools(cmdExecutor)
+
 	endpoint := "unix://" + endpointFile.Name()
-	drv, err := driver.NewControllerAndNodeDriver(nodeID, endpoint, dsmService)
+	drv, err := driver.NewControllerAndNodeDriver(nodeID, endpoint, dsmService, tools)
 	if err != nil {
 		t.Fatal(fmt.Sprintf("Failed to create driver: %v\n", err))
 	}

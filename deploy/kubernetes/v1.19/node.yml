@@ -93,6 +93,7 @@ spec:
             - --client-info
             - /etc/synology/client-info.yml
             - --log-level=info
+            - --chroot-dir=/host
           env:
             - name: CSI_ENDPOINT
               value: unix://csi/csi.sock

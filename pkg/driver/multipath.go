@@ -21,21 +21,23 @@ package driver
 import (
 	"context"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"os"
 	"regexp"
 	"strings"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 	utilexec "k8s.io/utils/exec"
 )
 
-func IsMultipathEnabled() bool {
-	return MultipathEnabled && multipathd_is_running()
+// IsMultipathEnabled returns true if multipath is enabled
+
+func (t *tools) IsMultipathEnabled() bool {
+	return MultipathEnabled && t.multipathd_is_running()
 }
 
-func multipathd_is_running() bool {
-	executor := utilexec.New()
-	cmd := executor.Command("multipathd", "show", "daemon")
+func (t *tools) multipathd_is_running() bool {
+	cmd := t.executor.Command("multipathd", "show", "daemon")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		matched, _ := regexp.MatchString(`pid \d+ (running|idle)`, string(out))
@@ -49,15 +51,14 @@ func multipathd_is_running() bool {
 }
 
 // execute a command with a timeout and returns an error if timeout is exceeded
-func execWithTimeout(command string, args []string, timeout time.Duration) ([]byte, error) {
+func (t *tools) execWithTimeout(command string, args []string, timeout time.Duration) ([]byte, error) {
 	log.Infof("Executing command '%v' with args: '%v'.", command, args)
 
 	// Create a new context and add a timeout to it
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	executor := utilexec.New()
-	cmd := executor.CommandContext(ctx, command, args...)
+	cmd := t.executor.CommandContext(ctx, command, args...)
 	out, err := cmd.Output()
 	log.Debug(err)
 
@@ -81,9 +82,8 @@ func execWithTimeout(command string, args []string, timeout time.Duration) ([]by
 }
 
 // resize a multipath device based on its underlying devices
-func multipath_resize(devName string) error {
-	executor := utilexec.New()
-	cmd := executor.Command("multipathd", "resize", "map", devName) // use devName not devPath, or it'll fail
+func (t *tools) multipath_resize(devName string) error {
+	cmd := t.executor.Command("multipathd", "resize", "map", devName) // use devName not devPath, or it'll fail
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s (%v)", string(out), err)
@@ -92,9 +92,9 @@ func multipath_resize(devName string) error {
 }
 
 // flushes a multipath device dm-x with command multipath -f /dev/dm-x
-func multipath_flush(devPath string) error {
+func (t *tools) multipath_flush(devPath string) error {
 	timeout := 5 * time.Second
-	out, err := execWithTimeout("multipath", []string{"-f", devPath}, timeout)
+	out, err := t.execWithTimeout("multipath", []string{"-f", devPath}, timeout)
 	if err != nil {
 		if _, e := os.Stat(devPath); os.IsNotExist(e) {
 			log.Debugf("Multipath device %v has been removed.", devPath)

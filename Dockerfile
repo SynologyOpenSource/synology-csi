@@ -28,14 +28,6 @@ RUN apk add --no-cache e2fsprogs e2fsprogs-extra xfsprogs xfsprogs-extra blkid u
 
 # Create symbolic link for chroot.sh
 WORKDIR /
-RUN mkdir /csibin
-COPY chroot/chroot.sh /csibin
-RUN chmod 777 /csibin/chroot.sh \
-        && ln -s /csibin/chroot.sh /csibin/iscsiadm \
-        && ln -s /csibin/chroot.sh /csibin/multipath \
-        && ln -s /csibin/chroot.sh /csibin/multipathd
-
-ENV PATH="/csibin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # Copy and run CSI driver
 COPY --from=builder /go/src/synok8scsiplugin/bin/synology-csi-driver synology-csi-driver
