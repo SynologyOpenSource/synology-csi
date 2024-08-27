@@ -77,7 +77,7 @@ func (service *DsmService) createSMBVolumeBySnapshot(dsm *webapi.DSM, spec *mode
 
 	log.Debugf("[%s] createSMBVolumeBySnapshot Successfully. VolumeId: %s", dsm.Ip, shareInfo.Uuid);
 
-	return DsmShareToK8sVolume(dsm.Ip, shareInfo), nil
+	return DsmShareToK8sVolume(dsm.Ip, shareInfo, spec.Protocol), nil
 }
 
 func (service *DsmService) createSMBVolumeByVolume(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, srcShareInfo webapi.ShareInfo) (*models.K8sVolumeRespSpec, error) {
@@ -124,15 +124,15 @@ func (service *DsmService) createSMBVolumeByVolume(dsm *webapi.DSM, spec *models
 
 	log.Debugf("[%s] createSMBVolumeByVolume Successfully. VolumeId: %s", dsm.Ip, shareInfo.Uuid);
 
-	return DsmShareToK8sVolume(dsm.Ip, shareInfo), nil
+	return DsmShareToK8sVolume(dsm.Ip, shareInfo, spec.Protocol), nil
 }
 
-func (service *DsmService) createSMBVolumeByDsm(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec) (*models.K8sVolumeRespSpec, error) {
+func (service *DsmService) createSMBorNFSVolumeByDsm(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, protocol string) (*models.K8sVolumeRespSpec, error) {
 	// TODO: Check if share name is allowable
 
 	// 1. Find a available location
 	if spec.Location == "" {
-		vol, err := service.getFirstAvailableVolume(dsm, spec.Size)
+		vol, err := service.getFirstAvailableVolume(dsm, spec.Size, spec.Protocol)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to get available location, err: %v", err))
 		}
@@ -140,9 +140,13 @@ func (service *DsmService) createSMBVolumeByDsm(dsm *webapi.DSM, spec *models.Cr
 	}
 
 	// 2. Check if location exists
-	_, err := dsm.VolumeGet(spec.Location)
+	dsmVolInfo, err := dsm.VolumeGet(spec.Location)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, fmt.Sprintf("Unable to find location %s", spec.Location))
+	}
+
+	if dsmVolInfo.FsType == models.FsTypeExt4 {
+		return nil, status.Errorf(codes.InvalidArgument, fmt.Sprintf("Location: %s with ext4 fstype was not supported for creating smb/nfs protocol's K8s volume", spec.Location))
 	}
 
 	// 3. Create Share
@@ -173,9 +177,9 @@ func (service *DsmService) createSMBVolumeByDsm(dsm *webapi.DSM, spec *models.Cr
 			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get existed Share with name: %s, err: %v", spec.ShareName, err))
 	}
 
-	log.Debugf("[%s] createSMBVolumeByDsm Successfully. VolumeId: %s", dsm.Ip, shareInfo.Uuid)
+	log.Debugf("[%s] createSMBorNFSVolumeByDsm Successfully. VolumeId: %s", dsm.Ip, shareInfo.Uuid)
 
-	return DsmShareToK8sVolume(dsm.Ip, shareInfo), nil
+	return DsmShareToK8sVolume(dsm.Ip, shareInfo, protocol), nil
 }
 
 func (service *DsmService) listSMBVolumes(dsmIp string) (infos []*models.K8sVolumeRespSpec) {
@@ -198,7 +202,8 @@ func (service *DsmService) listSMBVolumes(dsmIp string) (infos []*models.K8sVolu
 			if !strings.HasPrefix(share.Name, models.SharePrefix) {
 				continue
 			}
-			infos = append(infos, DsmShareToK8sVolume(dsm.Ip, share))
+			//NFSTODO, if share has set nfs rule, deal it as NFS
+			infos = append(infos, DsmShareToK8sVolume(dsm.Ip, share, utils.ProtocolSmb))
 		}
 	}
 

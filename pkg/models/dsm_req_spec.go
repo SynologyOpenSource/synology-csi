@@ -23,6 +23,7 @@ type CreateK8sVolumeSpec struct {
 	SourceSnapshotId string
 	SourceVolumeId   string
 	Protocol         string
+	NfsVersion       string
 }
 
 type K8sVolumeRespSpec struct {
@@ -36,6 +37,7 @@ type K8sVolumeRespSpec struct {
 	Target            webapi.TargetInfo
 	Share             webapi.ShareInfo
 	Protocol          string
+	BaseDir           string
 }
 
 type K8sSnapshotRespSpec struct {

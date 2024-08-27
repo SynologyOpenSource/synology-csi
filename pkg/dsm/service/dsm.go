@@ -100,7 +100,7 @@ func (service *DsmService) ListDsmVolumes(ip string) ([]webapi.VolInfo, error) {
 	return allVolInfos, nil
 }
 
-func (service *DsmService) getFirstAvailableVolume(dsm *webapi.DSM, sizeInBytes int64) (webapi.VolInfo, error) {
+func (service *DsmService) getFirstAvailableVolume(dsm *webapi.DSM, sizeInBytes int64, protocol string) (webapi.VolInfo, error) {
 	volInfos, err := dsm.VolumeList()
 	if err != nil {
 		return webapi.VolInfo{}, err
@@ -119,6 +119,10 @@ func (service *DsmService) getFirstAvailableVolume(dsm *webapi.DSM, sizeInBytes 
 		}
 		// ignore esata disk
 		if volInfo.Container == "external" && volInfo.Location == "sata" {
+			continue
+		}
+
+		if volInfo.FsType == models.FsTypeExt4 && (protocol == utils.ProtocolSmb || protocol == utils.ProtocolNfs) {
 			continue
 		}
 		return volInfo, nil
@@ -201,7 +205,7 @@ func (service *DsmService) createMappingTarget(dsm *webapi.DSM, spec *models.Cre
 func (service *DsmService) createVolumeByDsm(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec) (*models.K8sVolumeRespSpec, error) {
 	// 1. Find a available location
 	if spec.Location == "" {
-		vol, err := service.getFirstAvailableVolume(dsm, spec.Size)
+		vol, err := service.getFirstAvailableVolume(dsm, spec.Size, spec.Protocol)
 		if err != nil {
 			return nil,
 				status.Errorf(codes.Internal, fmt.Sprintf("Failed to get available location, err: %v", err))
@@ -372,16 +376,25 @@ func (service *DsmService) createVolumeByVolume(dsm *webapi.DSM, spec *models.Cr
 	return DsmLunToK8sVolume(dsm.Ip, lunInfo, targetInfo), nil
 }
 
-func DsmShareToK8sVolume(dsmIp string, info webapi.ShareInfo) *models.K8sVolumeRespSpec {
+func DsmShareToK8sVolume(dsmIp string, info webapi.ShareInfo, protocol string) *models.K8sVolumeRespSpec {
+	var source, baseDir string
+	if protocol == utils.ProtocolSmb {
+		source = "//" + dsmIp + "/" + info.Name
+	} else if protocol == utils.ProtocolNfs {
+		source = "//" + dsmIp + "/" + info.Name
+		baseDir = info.VolPath + "/" + info.Name
+	}
+
 	return &models.K8sVolumeRespSpec{
 		DsmIp: dsmIp,
 		VolumeId: info.Uuid,
 		SizeInBytes: utils.MBToBytes(info.QuotaValueInMB),
 		Location: info.VolPath,
 		Name: info.Name,
-		Source: "//" + dsmIp + "/" + info.Name,
-		Protocol: utils.ProtocolSmb,
+		Source: source,
+		Protocol: protocol,
 		Share: info,
+		BaseDir: baseDir,
 	}
 }
 
@@ -399,6 +412,45 @@ func DsmLunToK8sVolume(dsmIp string, info webapi.LunInfo, targetInfo webapi.Targ
 	}
 }
 
+func isNfsVersionSupport(dsm *webapi.DSM, nfsVersion string) bool {
+	major := 0
+	minor := 0
+
+	info, err := dsm.NfsGet()
+	if err != nil {
+		return false
+	}
+
+	if nfsVersion == "" {
+		major = info.SupportMajorVer
+		minor = info.SupportMinorVer
+	} else if nfsVersion == "3" {
+		major = 3
+	} else if nfsVersion == "4" || nfsVersion == "4.0" || nfsVersion == "4.1" {
+		major = 4
+		if nfsVersion == "4.1" {
+			minor = 1
+		}
+	} else {
+		log.Infof("Input nfsVersion = %s, not supported!", nfsVersion)
+		return false
+	}
+
+	if major > info.SupportMajorVer || (major == info.SupportMajorVer && minor > info.SupportMinorVer) {
+		log.Infof("Dsm NFS version not supported")
+		return false
+	}
+
+	// enable the highest NFS version the DSM supports
+	if err := dsm.NfsSet(true, (info.SupportMajorVer == 4), info.SupportMinorVer); err != nil {
+		log.Errorf("[%s] Failed to enable nfs: %v\n", dsm.Ip, err)
+		return false
+	}
+
+	return true
+}
+
+
 func (service *DsmService) CreateVolume(spec *models.CreateK8sVolumeSpec) (*models.K8sVolumeRespSpec, error) {
 	if spec.SourceVolumeId != "" {
 		/* Create volume by exists volume (Clone) */
@@ -414,7 +466,7 @@ func (service *DsmService) CreateVolume(spec *models.CreateK8sVolumeSpec) (*mode
 
 		if spec.Protocol == utils.ProtocolIscsi {
 			return service.createVolumeByVolume(dsm, spec, k8sVolume.Lun)
-		} else if spec.Protocol == utils.ProtocolSmb {
+		} else if spec.Protocol == utils.ProtocolSmb || spec.Protocol == utils.ProtocolNfs {
 			return service.createSMBVolumeByVolume(dsm, spec, k8sVolume.Share)
 		}
 		return nil, status.Error(codes.InvalidArgument, "Unknown protocol")
@@ -438,7 +490,10 @@ func (service *DsmService) CreateVolume(spec *models.CreateK8sVolumeSpec) (*mode
 				snapshot.RootPath, spec.Location)
 			return nil, status.Errorf(codes.InvalidArgument, msg)
 		}
-		if spec.Protocol != snapshot.Protocol {
+
+		log.Debugf("The source PVC protocol [%s] and the destination PVC protocol [%s]", snapshot.Protocol, spec.Protocol)
+		if (spec.Protocol == utils.ProtocolIscsi || snapshot.Protocol == utils.ProtocolIscsi) &&
+			spec.Protocol != snapshot.Protocol {
 			msg := fmt.Sprintf("The source PVC and destination PVCs shouldn't have different protocols. Source is %s, but new PVC is %s",
 				snapshot.Protocol, spec.Protocol)
 			return nil, status.Errorf(codes.InvalidArgument, msg)
@@ -451,7 +506,7 @@ func (service *DsmService) CreateVolume(spec *models.CreateK8sVolumeSpec) (*mode
 
 		if spec.Protocol == utils.ProtocolIscsi {
 			return service.createVolumeBySnapshot(dsm, spec, snapshot)
-		} else if spec.Protocol == utils.ProtocolSmb {
+		} else if spec.Protocol == utils.ProtocolSmb || spec.Protocol == utils.ProtocolNfs {
 			return service.createSMBVolumeBySnapshot(dsm, spec, snapshot)
 		}
 		return nil, status.Error(codes.InvalidArgument, "Unknown protocol")
@@ -468,7 +523,12 @@ func (service *DsmService) CreateVolume(spec *models.CreateK8sVolumeSpec) (*mode
 		if spec.Protocol == utils.ProtocolIscsi {
 			k8sVolume, err = service.createVolumeByDsm(dsm, spec)
 		} else if spec.Protocol == utils.ProtocolSmb {
-			k8sVolume, err = service.createSMBVolumeByDsm(dsm, spec)
+			k8sVolume, err = service.createSMBorNFSVolumeByDsm(dsm, spec, utils.ProtocolSmb)
+		} else if spec.Protocol == utils.ProtocolNfs {
+			if !isNfsVersionSupport(dsm, spec.NfsVersion) {
+				continue
+			}
+			k8sVolume, err = service.createSMBorNFSVolumeByDsm(dsm, spec, utils.ProtocolNfs)
 		}
 
 		if err != nil {
@@ -494,7 +554,7 @@ func (service *DsmService) DeleteVolume(volId string) error {
 		return status.Errorf(codes.Internal, fmt.Sprintf("Failed to get DSM[%s]", k8sVolume.DsmIp))
 	}
 
-	if k8sVolume.Protocol == utils.ProtocolSmb {
+	if k8sVolume.Protocol == utils.ProtocolSmb || k8sVolume.Protocol == utils.ProtocolNfs {
 		if err := dsm.ShareDelete(k8sVolume.Share.Name); err != nil {
 			log.Errorf("[%s] Failed to delete Share(%s): %v", dsm.Ip, k8sVolume.Share.Name, err)
 			return err
@@ -616,7 +676,7 @@ func (service *DsmService) ExpandVolume(volId string, newSize int64) (*models.K8
 		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to get DSM[%s]", k8sVolume.DsmIp))
 	}
 
-	if k8sVolume.Protocol == utils.ProtocolSmb {
+	if k8sVolume.Protocol == utils.ProtocolSmb || k8sVolume.Protocol == utils.ProtocolNfs {
 		newSizeInMB := utils.BytesToMBCeil(newSize) // round up to MB
 		if err := dsm.SetShareQuota(k8sVolume.Share, newSizeInMB); err != nil {
 			log.Errorf("[%s] Failed to set quota [%d (MB)] to Share [%s]: %v",
@@ -674,7 +734,7 @@ func (service *DsmService) CreateSnapshot(spec *models.CreateK8sVolumeSnapshotSp
 		}
 
 		return nil, status.Errorf(codes.NotFound, fmt.Sprintf("Failed to get iscsi snapshot (%s). Not found", snapshotUuid))
-	} else if k8sVolume.Protocol == utils.ProtocolSmb {
+	} else if k8sVolume.Protocol == utils.ProtocolSmb || k8sVolume.Protocol == utils.ProtocolNfs {
 		snapshotSpec := webapi.ShareSnapshotCreateSpec{
 			ShareName: k8sVolume.Share.Name,
 			Desc:      models.ShareSnapshotDescPrefix + spec.SnapshotName, // limitations: don't change the desc by DSM
@@ -692,7 +752,8 @@ func (service *DsmService) CreateSnapshot(spec *models.CreateK8sVolumeSnapshotSp
 				return snapshot, nil
 			}
 		}
-		return nil, status.Errorf(codes.NotFound, fmt.Sprintf("Failed to get smb snapshot (%s, %s). Not found", snapshotTime, srcVolId))
+		return nil, status.Errorf(codes.NotFound, fmt.Sprintf("Failed to get %s snapshot (%s, %s). Not found",
+			k8sVolume.Protocol, snapshotTime, srcVolId))
 	}
 
 	return nil, status.Error(codes.InvalidArgument, "Unsupported volume protocol")
@@ -718,7 +779,7 @@ func (service *DsmService) DeleteSnapshot(snapshotUuid string) error {
 		return err
 	}
 
-	if snapshot.Protocol == utils.ProtocolSmb {
+	if snapshot.Protocol == utils.ProtocolSmb || snapshot.Protocol == utils.ProtocolNfs {
 		if err := dsm.ShareSnapshotDelete(snapshot.Time, snapshot.ParentName); err != nil {
 			if snapshot := service.getSMBSnapshot(snapshotUuid); snapshot == nil { // idempotency
 				return nil

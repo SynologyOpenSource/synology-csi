@@ -25,12 +25,13 @@ import (
 
 const (
 	DriverName = "csi.san.synology.com" // CSI dirver name
-	DriverVersion = "1.1.3"
+	DriverVersion = "1.2.0"
 )
 
 var (
 	MultipathEnabled = true
-	supportedProtocolList = []string{utils.ProtocolIscsi, utils.ProtocolSmb}
+	supportedProtocolList = []string{utils.ProtocolIscsi, utils.ProtocolSmb, utils.ProtocolNfs}
+	allowedNfsVersionList = []string{"3", "4", "4.0", "4.1"}
 )
 
 type IDriver interface {
@@ -138,4 +139,8 @@ func (d *Driver) getVolumeCapabilityAccessModes() []*csi.VolumeCapability_Access
 
 func isProtocolSupport(protocol string) bool {
 	return utils.SliceContains(supportedProtocolList, protocol)
+}
+
+func isNfsVersionAllowed(ver string) bool {
+	return utils.SliceContains(allowedNfsVersionList, ver)
 }

@@ -76,6 +76,18 @@ type SharePermission struct {
 	IsAdmin    bool   `json:"is_admin,omitempty"` // field for list
 }
 
+type NfsInfo struct {
+	EnableNfs           bool   `json:"enable_nfs"`
+	EnableNfsV4         bool   `json:"enable_nfs_v4"`
+	NfsV4Domain         string `json:"nfs_v4_domain"`
+	ReadSize            int    `json:"read_size"`
+	SupportEncryptShare int    `json:"support_encrypt_share"`
+	SupportMajorVer     int    `json:"support_major_ver"`
+	SupportMinorVer     int    `json:"support_minor_ver"`
+	UnixPriEnable       bool   `json:"unix_pri_enable"`
+	WriteSize           int    `json:"write_size"`
+}
+
 func shareErrCodeMapping(errCode int, oriErr error) error {
 	switch errCode {
 	case 402: // No such share
@@ -359,5 +371,82 @@ func (dsm *DSM) SharePermissionList(shareName string, userGroupType string) ([]S
 	}
 
 	return infos.Permissions, nil
+}
+
+// ----------------------- FileServ NFS SharePrivilege APIs -----------------------
+type SecurityFlavor struct {
+	Kerbros          bool `json:"kerberos"`
+	KerbrosIntegrity bool `json:"kerberos_integrity"`
+	KerbrosPrivacy   bool `json:"kerberos_privacy"`
+	Sys              bool `json:"sys"`
+}
+
+type PrivilegeRule struct {
+	Async          bool           `json:"async"`
+	Client         string         `json:"client"`
+	Crossmnt       bool           `json:"crossmnt"`
+	Insecure       bool           `json:"insecure"`
+	Privilege      string         `json:"privilege"`
+	RootSquash     string         `json:"root_squash"`
+	SecurityFlavor SecurityFlavor `json:"security_flavor"`
+}
+
+type SharePrivilege struct {
+	ShareName string          `json:"share_name"`
+	Rule      []PrivilegeRule `json:"rule"`
+}
+
+func (dsm *DSM) ShareNfsPrivilegeSave(privilege SharePrivilege) error {
+	params := url.Values{}
+	params.Add("api", "SYNO.Core.FileServ.NFS.SharePrivilege")
+	params.Add("method", "save")
+	params.Add("share_name", strconv.Quote(privilege.ShareName))
+	params.Add("version", "1")
+
+	js, err := json.Marshal(privilege.Rule)
+	if err != nil {
+		return err
+	}
+	params.Add("rule", string(js))
+
+	_, err = dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (dsm *DSM) NfsGet() (NfsInfo, error) {
+	params := url.Values{}
+	params.Add("api", "SYNO.Core.FileServ.NFS")
+	params.Add("method", "get")
+	params.Add("version", "2")
+
+	info := NfsInfo{}
+	_, err := dsm.sendRequest("", &info, params, "webapi/entry.cgi")
+	if err != nil {
+		return NfsInfo{}, err
+	}
+
+	return info, nil
+}
+
+func (dsm *DSM) NfsSet(enableV3 bool, enableV4 bool, enabledMinorVer int) error {
+	params := url.Values{}
+	params.Add("api", "SYNO.Core.FileServ.NFS")
+	params.Add("method", "set")
+	params.Add("version", "2")
+
+	params.Add("enable_nfs", strconv.FormatBool(enableV3))
+	params.Add("enable_nfs_v4", strconv.FormatBool(enableV4))
+	params.Add("enabled_minor_ver", strconv.Itoa(enabledMinorVer))
+
+	_, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
