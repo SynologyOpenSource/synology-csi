@@ -32,6 +32,8 @@ import (
 	"google.golang.org/grpc/status"
 	"golang.org/x/sys/unix"
 	"k8s.io/mount-utils"
+	clientset "k8s.io/client-go/kubernetes"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/webapi"
 	"github.com/SynologyOpenSource/synology-csi/pkg/interfaces"
@@ -44,6 +46,7 @@ type nodeServer struct {
 	Mounter    *mount.SafeFormatAndMount
 	dsmService interfaces.IDsmService
 	Initiator  *initiatorDriver
+	Client     clientset.Interface
 }
 
 func waitForDevicePathToExist(path string) error {
@@ -278,8 +281,29 @@ func (ns *nodeServer) mountSensitiveWithRetry(sourcePath string, targetPath stri
 	return nil
 }
 
+func getNodeAddress(ctx context.Context, client clientset.Interface) ([]string, error) {
+	ips := []string{}
+	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		log.Errorf("Failed to list nodes, err: %v", err)
+		return nil, err
+	}
 
-func (ns *nodeServer) setNFSVolumePrivilege(sourcePath string, hostname string, authType utils.AuthType) error {
+	for _, node := range nodes.Items {
+		for _, address := range node.Status.Addresses {
+			if address.Type == "InternalIP" {
+				ips = append(ips, address.Address)
+			}
+		}
+	}
+
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("Empty results")
+	}
+	return ips, nil
+}
+
+func (ns *nodeServer) setNFSVolumePrivilege(sourcePath string, hostnames []string, authType utils.AuthType) error {
 	// NFSTODO: fix the parsing rule
 	s := strings.Split(strings.TrimPrefix(sourcePath, "//"), "/")
 	if len(s) != 2 {
@@ -294,22 +318,23 @@ func (ns *nodeServer) setNFSVolumePrivilege(sourcePath string, hostname string, 
 
 	priv := webapi.SharePrivilege{
 		ShareName: shareName,
-		Rule: []webapi.PrivilegeRule{
-			{
-				Async:      true,
-				Client:     hostname,
-				Crossmnt:   true,
-				Insecure:   true,
-				Privilege:  string(authType),
-				RootSquash: "root",
-				SecurityFlavor: webapi.SecurityFlavor{
-					Kerbros:          false,
-					KerbrosIntegrity: false,
-					KerbrosPrivacy:   false,
-					Sys:              true,
-				},
+	}
+
+	for _, hostname := range hostnames {
+		priv.Rule = append(priv.Rule, webapi.PrivilegeRule{
+			Async:      true,
+			Client:     hostname,
+			Crossmnt:   true,
+			Insecure:   true,
+			Privilege:  string(authType),
+			RootSquash: "root",
+			SecurityFlavor: webapi.SecurityFlavor{
+				Kerbros:          false,
+				KerbrosIntegrity: false,
+				KerbrosPrivacy:   false,
+				Sys:              true,
 			},
-		},
+		})
 	}
 
 	err = dsm.ShareNfsPrivilegeSave(priv)
@@ -450,7 +475,12 @@ func (ns *nodeServer) nodeStageSMBVolume(ctx context.Context, spec *models.NodeS
 }
 
 func (ns *nodeServer) nodeStageNFSVolume(ctx context.Context, spec *models.NodeStageVolumeSpec) (*csi.NodeStageVolumeResponse, error) {
-	if err := ns.setNFSVolumePrivilege(spec.Source, "*", utils.AuthTypeReadWrite); err != nil { //NFSTODO: get workernode IP instead of *
+	nodeIps, err := getNodeAddress(ctx, ns.Client)
+	if err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to get node IPs for NFS privilege setting, err: %v", err))
+	}
+
+	if err := ns.setNFSVolumePrivilege(spec.Source, nodeIps, utils.AuthTypeReadWrite); err != nil {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to set NFS privilege rule, source: %s, err: %v", spec.Source, err))
 	}
 	return &csi.NodeStageVolumeResponse{}, nil

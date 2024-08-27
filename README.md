@@ -224,7 +224,7 @@ Create and apply VolumeSnapshotClasses with the properties you want.
     | Name          | Type   | Description                                  | Default | Supported protocols |
     | ------------- | ------ | -------------------------------------------- | ------- | ------------------- |
     | *description* | string | The description of the snapshot on DSM       | ""      | iSCSI               |
-    | *is_locked*   | string | Whether you want to lock the snapshot on DSM | 'false' | iSCSI, SMB          |
+    | *is_locked*   | string | Whether you want to lock the snapshot on DSM | 'false' | iSCSI, SMB, NFS     |
 
 3. Apply the YAML files to the Kubernetes cluster.
 

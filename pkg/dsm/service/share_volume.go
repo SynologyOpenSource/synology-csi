@@ -27,7 +27,7 @@ func GMTToUnixSecond(timeStr string) (int64) {
 	return t.Unix()
 }
 
-func (service *DsmService) createSMBVolumeBySnapshot(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, srcSnapshot *models.K8sSnapshotRespSpec) (*models.K8sVolumeRespSpec, error) {
+func (service *DsmService) createSMBorNFSVolumeBySnapshot(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, srcSnapshot *models.K8sSnapshotRespSpec) (*models.K8sVolumeRespSpec, error) {
 	srcShareInfo, err := dsm.ShareGet(srcSnapshot.ParentName)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to get share: %s, err: %v", srcSnapshot.ParentName, err))
@@ -75,12 +75,12 @@ func (service *DsmService) createSMBVolumeBySnapshot(dsm *webapi.DSM, spec *mode
 			status.Errorf(codes.OutOfRange, "Requested share quotaMB [%d] is not equal to snapshot restore quotaMB [%d]", newSizeInMB, shareInfo.QuotaValueInMB)
 	}
 
-	log.Debugf("[%s] createSMBVolumeBySnapshot Successfully. VolumeId: %s", dsm.Ip, shareInfo.Uuid);
+	log.Debugf("[%s] createSMBorNFSVolumeBySnapshot Successfully. VolumeId: %s", dsm.Ip, shareInfo.Uuid);
 
 	return DsmShareToK8sVolume(dsm.Ip, shareInfo, spec.Protocol), nil
 }
 
-func (service *DsmService) createSMBVolumeByVolume(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, srcShareInfo webapi.ShareInfo) (*models.K8sVolumeRespSpec, error) {
+func (service *DsmService) createSMBorNFSVolumeByVolume(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, srcShareInfo webapi.ShareInfo) (*models.K8sVolumeRespSpec, error) {
 	newSizeInMB := utils.BytesToMBCeil(spec.Size)
 	if spec.Size != 0 && newSizeInMB != srcShareInfo.QuotaValueInMB {
 		return nil,
@@ -122,12 +122,12 @@ func (service *DsmService) createSMBVolumeByVolume(dsm *webapi.DSM, spec *models
 		shareInfo.QuotaValueInMB = newSizeInMB
 	}
 
-	log.Debugf("[%s] createSMBVolumeByVolume Successfully. VolumeId: %s", dsm.Ip, shareInfo.Uuid);
+	log.Debugf("[%s] createSMBorNFSVolumeByVolume Successfully. VolumeId: %s", dsm.Ip, shareInfo.Uuid);
 
 	return DsmShareToK8sVolume(dsm.Ip, shareInfo, spec.Protocol), nil
 }
 
-func (service *DsmService) createSMBorNFSVolumeByDsm(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, protocol string) (*models.K8sVolumeRespSpec, error) {
+func (service *DsmService) createSMBorNFSVolumeByDsm(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec) (*models.K8sVolumeRespSpec, error) {
 	// TODO: Check if share name is allowable
 
 	// 1. Find a available location
@@ -179,10 +179,10 @@ func (service *DsmService) createSMBorNFSVolumeByDsm(dsm *webapi.DSM, spec *mode
 
 	log.Debugf("[%s] createSMBorNFSVolumeByDsm Successfully. VolumeId: %s", dsm.Ip, shareInfo.Uuid)
 
-	return DsmShareToK8sVolume(dsm.Ip, shareInfo, protocol), nil
+	return DsmShareToK8sVolume(dsm.Ip, shareInfo, spec.Protocol), nil
 }
 
-func (service *DsmService) listSMBVolumes(dsmIp string) (infos []*models.K8sVolumeRespSpec) {
+func (service *DsmService) listSMBorNFSVolumes(dsmIp string) (infos []*models.K8sVolumeRespSpec) {
 	for _, dsm := range service.dsms {
 		if dsmIp != "" && dsmIp != dsm.Ip {
 			continue
@@ -202,16 +202,25 @@ func (service *DsmService) listSMBVolumes(dsmIp string) (infos []*models.K8sVolu
 			if !strings.HasPrefix(share.Name, models.SharePrefix) {
 				continue
 			}
-			//NFSTODO, if share has set nfs rule, deal it as NFS
-			infos = append(infos, DsmShareToK8sVolume(dsm.Ip, share, utils.ProtocolSmb))
+			// if share has set nfs rule, deal it as NFS
+			sharePrivilege, err := dsm.ShareNfsPrivilegeLoad(share.Name)
+			if err != nil {
+				log.Errorf("[%s] Failed to load share nfs privilege: %v", dsm.Ip, err)
+				continue
+			}
+			if len(sharePrivilege.Rule) > 0 {
+				infos = append(infos, DsmShareToK8sVolume(dsm.Ip, share, utils.ProtocolNfs))
+			} else {
+				infos = append(infos, DsmShareToK8sVolume(dsm.Ip, share, utils.ProtocolSmb))
+			}
 		}
 	}
 
 	return infos
 }
 
-func (service *DsmService) listSMBSnapshotsByDsm(dsm *webapi.DSM) (infos []*models.K8sSnapshotRespSpec) {
-	volumes := service.listSMBVolumes(dsm.Ip)
+func (service *DsmService) listSMBorNFSSnapshotsByDsm(dsm *webapi.DSM) (infos []*models.K8sSnapshotRespSpec) {
+	volumes := service.listSMBorNFSVolumes(dsm.Ip)
 	for _, volume := range volumes {
 		shareInfo := volume.Share
 		shareSnaps, err := dsm.ShareSnapshotList(shareInfo.Name)
@@ -220,15 +229,15 @@ func (service *DsmService) listSMBSnapshotsByDsm(dsm *webapi.DSM) (infos []*mode
 			continue
 		}
 		for _, info := range shareSnaps {
-			infos = append(infos, DsmShareSnapshotToK8sSnapshot(dsm.Ip, info, shareInfo))
+			infos = append(infos, DsmShareSnapshotToK8sSnapshot(dsm.Ip, info, shareInfo, volume.Protocol))
 		}
 	}
 	return infos
 }
 
-func (service *DsmService) getSMBSnapshot(snapshotUuid string) *models.K8sSnapshotRespSpec {
+func (service *DsmService) getSMBorNFSSnapshot(snapshotUuid string) *models.K8sSnapshotRespSpec {
 	for _, dsm := range service.dsms {
-		snapshots := service.listSMBSnapshotsByDsm(dsm)
+		snapshots := service.listSMBorNFSSnapshotsByDsm(dsm)
 		for _, snap := range snapshots {
 			if snap.Uuid == snapshotUuid {
 				return snap

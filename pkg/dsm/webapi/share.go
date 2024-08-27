@@ -343,6 +343,10 @@ func (dsm *DSM) SharePermissionSet(spec SharePermissionSetSpec) error {
 	}
 	params.Add("permissions", string(js))
 
+	if logger.WebapiDebug {
+		log.Debugln(params)
+	}
+
 	resp, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
 
 	return shareErrCodeMapping(resp.ErrorCode, err)
@@ -415,6 +419,22 @@ func (dsm *DSM) ShareNfsPrivilegeSave(privilege SharePrivilege) error {
 	}
 
 	return nil
+}
+
+func (dsm *DSM) ShareNfsPrivilegeLoad(shareName string) (SharePrivilege, error) {
+	params := url.Values{}
+	params.Add("api", "SYNO.Core.FileServ.NFS.SharePrivilege")
+	params.Add("method", "load")
+	params.Add("share_name", strconv.Quote(shareName))
+	params.Add("version", "1")
+
+	info := SharePrivilege{}
+	_, err := dsm.sendRequest("", &info, params, "webapi/entry.cgi")
+	if err != nil {
+		return SharePrivilege{}, err
+	}
+
+	return info, nil
 }
 
 func (dsm *DSM) NfsGet() (NfsInfo, error) {
