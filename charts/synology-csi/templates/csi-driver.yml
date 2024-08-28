@@ -1,0 +1,9 @@
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: csi.san.synology.com
+spec:
+  attachRequired: true # Indicates the driver requires an attach operation (TODO: ControllerPublishVolume should be implemented)
+  podInfoOnMount: true
+  volumeLifecycleModes:
+    - Persistent
