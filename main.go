@@ -55,14 +55,15 @@ var rootCmd = &cobra.Command{
 func driverStart() error {
 	log.Infof("CSI Options = {%s, %s, %s}", csiNodeID, csiEndpoint, csiClientInfoPath)
 
-	dsmService := service.NewDsmService()
-
 	// 1. Login DSMs by given ClientInfo
 	info, err := common.LoadConfig(csiClientInfoPath)
 	if err != nil {
 		log.Errorf("Failed to read config: %v", err)
 		return err
 	}
+
+
+	dsmService := service.NewDsmService(info.SkipLunPrefix, info.SkipSharePrefix)
 
 	for _, client := range info.Clients {
 		err := dsmService.AddDsm(client)

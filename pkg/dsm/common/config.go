@@ -19,7 +19,9 @@ type ClientInfo struct {
 }
 
 type SynoInfo struct {
-	Clients []ClientInfo `yaml:"clients"`
+	Clients         []ClientInfo `yaml:"clients"`
+	SkipLunPrefix   bool         `yaml:"skip_lun_prefix"`
+	SkipSharePrefix bool         `yaml:"skip_share_prefix"`
 }
 
 func LoadConfig(configPath string) (*SynoInfo, error) {
