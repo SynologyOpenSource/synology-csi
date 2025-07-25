@@ -24,6 +24,7 @@ type CreateK8sVolumeSpec struct {
 	SourceVolumeId   string
 	Protocol         string
 	NfsVersion       string
+	DevAttribs       string
 }
 
 type K8sVolumeRespSpec struct {
