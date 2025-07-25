@@ -27,6 +27,8 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
 	"google.golang.org/grpc"
+	clientset "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/utils/exec"
 	"k8s.io/mount-utils"
 )
@@ -48,6 +50,19 @@ func NewControllerServer(d *Driver) *controllerServer {
 	}
 }
 
+func getK8sClient() clientset.Interface {
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		log.Fatalf("Failed to read in-cluster config: %v", err)
+	}
+
+	client, err := clientset.NewForConfig(config)
+	if err != nil {
+		log.Fatalf("Failed to create Kubernetes client: %v", err)
+	}
+	return client
+}
+
 func NewNodeServer(d *Driver) *nodeServer {
 	return &nodeServer{
 		Driver: d,
@@ -60,6 +75,7 @@ func NewNodeServer(d *Driver) *nodeServer {
 			chapUser: "",
 			chapPassword: "",
 		},
+		Client: getK8sClient(),
 	}
 }
 

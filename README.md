@@ -6,7 +6,7 @@ The official [Container Storage Interface](https://github.com/container-storage-
 Driver Name: csi.san.synology.com
 | Driver Version                                                                   | Image                                                                 | Supported K8s Version |
 | -------------------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------- |
-| [v1.1.3](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.1.3) | [synology-csi:v1.1.3](https://hub.docker.com/r/synology/synology-csi) | 1.20+                 |
+| [v1.2.0](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.2.0) | [synology-csi:v1.2.0](https://hub.docker.com/r/synology/synology-csi) | 1.20+                 |
 
 
 
@@ -22,7 +22,7 @@ The Synology CSI driver supports:
 - Synology NAS running:
     * DSM 7.0 or above
     * DSM UC 3.1 or above
-- Go version 1.16 or above is recommended
+- Go version 1.21 or above is recommended
 - (Optional) Both [Volume Snapshot CRDs](https://github.com/kubernetes-csi/external-snapshotter/tree/v4.0.0/client/config/crd) and the [common snapshot controller](https://github.com/kubernetes-csi/external-snapshotter/tree/v4.0.0/deploy/kubernetes/snapshot-controller) must be installed in your Kubernetes cluster if you want to use the **Snapshot** feature
 
 ### Notice
@@ -158,18 +158,37 @@ Create and apply StorageClasses with the properties you want.
     allowVolumeExpansion: true
     ```
 
+    **NFS Protocol**
+    ```
+    apiVersion: storage.k8s.io/v1
+    kind: StorageClass
+    metadata:
+      name: synostorage-nfs
+    provisioner: csi.san.synology.com
+    parameters:
+      protocol: "nfs"
+      dsm: "192.168.1.1"
+      location: '/volume1'
+      mountPermissions: '0755'
+    mountOptions:
+      - nfsvers=4.1
+    reclaimPolicy: Delete
+    allowVolumeExpansion: true
+    ```
+
 2. Configure the StorageClass properties by assigning the parameters in the table. You can also leave blank if you don’t have a preference:
 
     | Name                                             | Type   | Description                                                                                                                                                        | Default | Supported protocols |
     | ------------------------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- | ------------------- |
-    | *dsm*                                            | string | The IPv4 address of your DSM, which must be included in the `client-info.yml` for the CSI driver to log in to DSM                                                  | -       | iSCSI, SMB          |
-    | *location*                                       | string | The location (/volume1, /volume2, ...) on DSM where the LUN for *PersistentVolume* will be created                                                                 | -       | iSCSI, SMB          |
+    | *dsm*                                            | string | The IPv4 address of your DSM, which must be included in the `client-info.yml` for the CSI driver to log in to DSM                                                  | -       | iSCSI, SMB, NFS     |
+    | *location*                                       | string | The location (/volume1, /volume2, ...) on DSM where the LUN for *PersistentVolume* will be created                                                                 | -       | iSCSI, SMB, NFS     |
     | *fsType*                                         | string | The formatting file system of the *PersistentVolumes* when you mount them on the pods. This parameter only works with iSCSI. For SMB, the fsType is always ‘cifs‘. | 'ext4'  | iSCSI               |
-    | *protocol*                                       | string | The storage backend protocol. Enter ‘iscsi’ to create LUNs or ‘smb‘ to create shared folders on DSM.                                                               | 'iscsi' | iSCSI, SMB          |
-    | *formatOptions*                                  | string | Additional options/arguments passed to `mkfs.*` command. See a linux manual that corresponds with your FS of choice.                                             | -       | iSCSI               |
-    | *devAttribs*                                     | string | Additional device attributes passed to LUN create API.                                                                                                             | -       | iSCSI               |
+    | *protocol*                                       | string | The storage backend protocol. Enter ‘iscsi’ to create LUNs, or ‘smb‘ or 'nfs' to create shared folders on DSM.                                                     | 'iscsi' | iSCSI, SMB, NFS     |
+    | *formatOptions*                                  | string | Additional options/arguments passed to `mkfs.*` command. See a linux manual that corresponds with your FS of choice.                                               | -       | iSCSI               |
+    | *devAttribs*                                     | string | Additional device attributes passed to LUN create API. **Note:** Intended for advanced usage. Ensure understanding before applying.                                | -       | iSCSI               |
     | *csi.storage.k8s.io/node-stage-secret-name*      | string | The name of node-stage-secret. Required if DSM shared folder is accessed via SMB.                                                                                  | -       | SMB                 |
     | *csi.storage.k8s.io/node-stage-secret-namespace* | string | The namespace of node-stage-secret. Required if DSM shared folder is accessed via SMB.                                                                             | -       | SMB                 |
+    | *mountPermissions*                               | string | Mounted folder permissions. If set as non-zero, driver will perform `chmod` after mount                                                                            | '0750'  | NFS                 |
 
     **Notice**
 
@@ -207,7 +226,7 @@ Create and apply VolumeSnapshotClasses with the properties you want.
     | Name          | Type   | Description                                  | Default | Supported protocols |
     | ------------- | ------ | -------------------------------------------- | ------- | ------------------- |
     | *description* | string | The description of the snapshot on DSM       | ""      | iSCSI               |
-    | *is_locked*   | string | Whether you want to lock the snapshot on DSM | 'false' | iSCSI, SMB          |
+    | *is_locked*   | string | Whether you want to lock the snapshot on DSM | 'false' | iSCSI, SMB, NFS     |
 
 3. Apply the YAML files to the Kubernetes cluster.
 

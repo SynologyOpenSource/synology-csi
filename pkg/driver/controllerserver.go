@@ -69,6 +69,18 @@ func (cs *controllerServer) isVolumeAccessModeSupport(mode csi.VolumeCapability_
 	return false
 }
 
+func parseNfsVesrion(ops []string) string {
+	for _, op := range ops {
+		if strings.HasPrefix(op, "nfsvers") {
+			kvpair := strings.Split(op, "=")
+			if len(kvpair) == 2 {
+				return kvpair[1]
+			}
+		}
+	}
+	return ""
+}
+
 func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
 	sizeInByte, err := getSizeByCapacityRange(req.GetCapacityRange())
 	volName, volCap := req.GetName(), req.GetVolumeCapabilities()
@@ -89,7 +101,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	if volCap == nil {
 		return nil, status.Errorf(codes.InvalidArgument, "No volume capabilities are provided")
 	}
-
+	var mountOptions []string
 	for _, cap := range volCap {
 		accessMode := cap.GetAccessMode().GetMode()
 
@@ -101,6 +113,10 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			multiSession = false
 		} else if accessMode == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
 			multiSession = true
+		}
+
+		if mount := cap.GetMount(); mount != nil {
+			mountOptions = mount.GetMountFlags()
 		}
 	}
 
@@ -129,8 +145,15 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	// not needed during CreateVolume method
-	// used only in NodeStageVolume though VolumeContext
+	// used only in NodeStageVolume through VolumeContext
 	formatOptions := params["formatOptions"]
+	mountPermissions := params["mountPermissions"]
+	// check mountPermissions valid
+	if mountPermissions != "" {
+		if _, err := strconv.ParseUint(mountPermissions, 8, 32); err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, fmt.Sprintf("invalid mountPermissions %s in storage class", mountPermissions))
+		}
+	}
 
 	devAttribs := params["devAttribs"]
 
@@ -141,6 +164,11 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		pvcNamespace := params["csi.storage.k8s.io/pvc/namespace"]
 		pvcName := params["csi.storage.k8s.io/pvc/name"]
 		lunDescription = pvcNamespace + "/" + pvcName
+	}
+
+	nfsVer := parseNfsVesrion(mountOptions)
+	if nfsVer != "" && !isNfsVersionAllowed(nfsVer) {
+		return nil, status.Errorf(codes.InvalidArgument, "Unsupported nfsvers: %s", nfsVer)
 	}
 
 	spec := &models.CreateK8sVolumeSpec{
@@ -158,6 +186,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		SourceSnapshotId: srcSnapshotId,
 		SourceVolumeId:   srcVolumeId,
 		Protocol:         protocol,
+		NfsVersion:       nfsVer,
 		DevAttribs:       devAttribs,
 	}
 
@@ -175,7 +204,8 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	if (k8sVolume.Protocol == utils.ProtocolIscsi && k8sVolume.SizeInBytes != sizeInByte) ||
-		(k8sVolume.Protocol == utils.ProtocolSmb && utils.BytesToMB(k8sVolume.SizeInBytes) != utils.BytesToMBCeil(sizeInByte)) {
+		(k8sVolume.Protocol == utils.ProtocolSmb && utils.BytesToMB(k8sVolume.SizeInBytes) != utils.BytesToMBCeil(sizeInByte)) ||
+		(k8sVolume.Protocol == utils.ProtocolNfs && utils.BytesToMB(k8sVolume.SizeInBytes) != utils.BytesToMBCeil(sizeInByte)) {
 		return nil, status.Errorf(codes.AlreadyExists, "Already existing volume name with different capacity")
 	}
 
@@ -185,10 +215,12 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			CapacityBytes: k8sVolume.SizeInBytes,
 			ContentSource: volContentSrc,
 			VolumeContext: map[string]string{
-				"dsm":           k8sVolume.DsmIp,
-				"protocol":      k8sVolume.Protocol,
-				"source":        k8sVolume.Source,
-				"formatOptions": formatOptions,
+				"dsm":              k8sVolume.DsmIp,
+				"protocol":         k8sVolume.Protocol,
+				"source":           k8sVolume.Source,
+				"formatOptions":    formatOptions,
+				"mountPermissions": mountPermissions,
+				"baseDir":          k8sVolume.BaseDir,
 			},
 		},
 	}, nil

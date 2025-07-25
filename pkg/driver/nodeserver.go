@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +32,8 @@ import (
 	"google.golang.org/grpc/status"
 	"golang.org/x/sys/unix"
 	"k8s.io/mount-utils"
+	clientset "k8s.io/client-go/kubernetes"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/webapi"
 	"github.com/SynologyOpenSource/synology-csi/pkg/interfaces"
@@ -43,6 +46,7 @@ type nodeServer struct {
 	Mounter    *mount.SafeFormatAndMount
 	dsmService interfaces.IDsmService
 	Initiator  *initiatorDriver
+	Client     clientset.Interface
 }
 
 func waitForDevicePathToExist(path string) error {
@@ -109,6 +113,21 @@ func getVolumeMountPath(iscsiDevPaths []string) string {
 	}
 
 	return path
+}
+
+func createTargetMountPathNFS(mounter mount.Interface, mountPath string, mountPermissionsUint uint64) (bool, error) {
+	notMount, err := mounter.IsLikelyNotMountPoint(mountPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if err := os.MkdirAll(mountPath, os.FileMode(mountPermissionsUint)); err != nil {
+				return notMount, err
+			}
+			notMount = true
+		} else {
+			return false, err
+		}
+	}
+	return notMount, nil
 }
 
 func createTargetMountPath(mounter mount.Interface, mountPath string, isBlock bool) (bool, error) {
@@ -262,6 +281,70 @@ func (ns *nodeServer) mountSensitiveWithRetry(sourcePath string, targetPath stri
 	return nil
 }
 
+func getNodeAddress(ctx context.Context, client clientset.Interface) ([]string, error) {
+	ips := []string{}
+	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		log.Errorf("Failed to list nodes, err: %v", err)
+		return nil, err
+	}
+
+	for _, node := range nodes.Items {
+		for _, address := range node.Status.Addresses {
+			if address.Type == "InternalIP" {
+				ips = append(ips, address.Address)
+			}
+		}
+	}
+
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("Empty results")
+	}
+	return ips, nil
+}
+
+func (ns *nodeServer) setNFSVolumePrivilege(sourcePath string, hostnames []string, authType utils.AuthType) error {
+	// NFSTODO: fix the parsing rule
+	s := strings.Split(strings.TrimPrefix(sourcePath, "//"), "/")
+	if len(s) != 2 {
+		return fmt.Errorf("Failed to parse dsmIp and shareName from source path")
+	}
+	dsmIp, shareName := s[0], s[1]
+
+	dsm, err := ns.dsmService.GetDsm(dsmIp)
+	if err != nil {
+		return fmt.Errorf("Failed to get DSM[%s]", dsmIp)
+	}
+
+	priv := webapi.SharePrivilege{
+		ShareName: shareName,
+	}
+
+	for _, hostname := range hostnames {
+		priv.Rule = append(priv.Rule, webapi.PrivilegeRule{
+			Async:      true,
+			Client:     hostname,
+			Crossmnt:   true,
+			Insecure:   true,
+			Privilege:  string(authType),
+			RootSquash: "root",
+			SecurityFlavor: webapi.SecurityFlavor{
+				Kerbros:          false,
+				KerbrosIntegrity: false,
+				KerbrosPrivacy:   false,
+				Sys:              true,
+			},
+		})
+	}
+
+	err = dsm.ShareNfsPrivilegeSave(priv)
+	if err != nil {
+		log.Printf("Failed to save share NFS privilege. Priv:%v. %v", priv, err)
+		return err
+	}
+	return nil
+}
+
 func (ns *nodeServer) setSMBVolumePermission(sourcePath string, userName string, authType utils.AuthType) error {
 	s := strings.Split(strings.TrimPrefix(sourcePath, "//"), "/")
 	if len(s) != 2 {
@@ -391,6 +474,18 @@ func (ns *nodeServer) nodeStageSMBVolume(ctx context.Context, spec *models.NodeS
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 
+func (ns *nodeServer) nodeStageNFSVolume(ctx context.Context, spec *models.NodeStageVolumeSpec) (*csi.NodeStageVolumeResponse, error) {
+	nodeIps, err := getNodeAddress(ctx, ns.Client)
+	if err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to get node IPs for NFS privilege setting, err: %v", err))
+	}
+
+	if err := ns.setNFSVolumePrivilege(spec.Source, nodeIps, utils.AuthTypeReadWrite); err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to set NFS privilege rule, source: %s, err: %v", spec.Source, err))
+	}
+	return &csi.NodeStageVolumeResponse{}, nil
+}
+
 func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
 	volumeId, stagingTargetPath, volumeCapability :=
 		req.GetVolumeId(), req.GetStagingTargetPath(), req.GetVolumeCapability()
@@ -416,6 +511,8 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	switch req.VolumeContext["protocol"] {
 	case utils.ProtocolSmb:
 		return ns.nodeStageSMBVolume(ctx, spec, req.GetSecrets())
+	case utils.ProtocolNfs:
+		return ns.nodeStageNFSVolume(ctx, spec)
 	default:
 		return ns.nodeStageISCSIVolume(ctx, spec)
 	}
@@ -461,7 +558,71 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 
 	isBlock := req.GetVolumeCapability().GetBlock() != nil // raw block, only for iscsi protocol
 	fsType := req.GetVolumeCapability().GetMount().GetFsType()
+	options := []string{}
+	if req.GetReadonly() {
+		options = append(options, "ro")
+	}
 
+	// nfs
+	if req.VolumeContext["protocol"] == utils.ProtocolNfs {
+		options = append(options, req.GetVolumeCapability().GetMount().GetMountFlags()...)
+
+		var server, baseDir string //NFSTODO: subDir
+		var mountPermissionsUint uint64 = 0750 // default
+		for k, v := range req.GetVolumeContext() {
+			switch k {
+			case "dsm":
+				server = v
+			case "baseDir":
+				baseDir = v
+			case "mountPermissions":
+				if v != "" {
+					var err error
+					mountPermissionsUint, err = strconv.ParseUint(v, 8, 32)
+					if err != nil {
+						return nil, status.Errorf(codes.InvalidArgument, fmt.Sprintf("invalid mountPermissions %s", v))
+					}
+				}
+			}
+		}
+
+		if server == "" || baseDir == "" {
+			return nil, status.Error(codes.InvalidArgument, fmt.Sprintf("Invalid inputs: server(dsm) and baseDir are required."))
+		}
+		source := fmt.Sprintf("%s:%s", server, baseDir)
+
+		notMount, err := createTargetMountPathNFS(ns.Mounter.Interface, targetPath, mountPermissionsUint)
+		if err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		if !notMount {
+			log.Infof("NodePublishVolume: %s is already mounted", targetPath)
+			return &csi.NodePublishVolumeResponse{}, nil
+		}
+
+		log.Debugf("NodePublishVolume: volumeId(%v) source(%s) targetPath(%s) mountflags(%v)", volumeId, source, targetPath, options)
+		err = ns.Mounter.Mount(source, targetPath, "nfs", options)
+		if err != nil {
+			if os.IsPermission(err) {
+				return nil, status.Error(codes.PermissionDenied, err.Error())
+			}
+			if strings.Contains(err.Error(), "invalid argument") {
+				return nil, status.Error(codes.InvalidArgument, err.Error())
+			}
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+
+		if mountPermissionsUint > 0 {
+			if err := chmodIfPermissionMismatch(targetPath, os.FileMode(mountPermissionsUint)); err != nil {
+				return nil, status.Error(codes.Internal, err.Error())
+			}
+		}
+
+		log.Debugf("NFS volume(%s) mount %s on %s succeeded", volumeId, source, targetPath)
+		return &csi.NodePublishVolumeResponse{}, nil
+	}
+
+	// iscsi & smb
 	notMount, err := createTargetMountPath(ns.Mounter.Interface, targetPath, isBlock)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
@@ -470,10 +631,7 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		return &csi.NodePublishVolumeResponse{}, nil
 	}
 
-	options := []string{"bind"}
-	if req.GetReadonly() {
-		options = append(options, "ro")
-	}
+	options = append(options, "bind")
 
 	switch req.VolumeContext["protocol"] {
 	case utils.ProtocolSmb:
@@ -574,7 +732,7 @@ func (ns *nodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 			fmt.Sprintf("Volume[%s] does not exist on the %s", volumeId, volumePath))
 	}
 
-	if k8sVolume.Protocol == utils.ProtocolSmb {
+	if k8sVolume.Protocol == utils.ProtocolSmb || k8sVolume.Protocol == utils.ProtocolNfs {
 		return &csi.NodeGetVolumeStatsResponse{
 			Usage: []*csi.VolumeUsage{
 				&csi.VolumeUsage{
@@ -635,7 +793,7 @@ func (ns *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 		return nil, status.Error(codes.NotFound, fmt.Sprintf("Volume[%s] is not found", volumeId))
 	}
 
-	if k8sVolume.Protocol == utils.ProtocolSmb {
+	if k8sVolume.Protocol == utils.ProtocolSmb || k8sVolume.Protocol == utils.ProtocolNfs {
 		return &csi.NodeExpandVolumeResponse{
 			CapacityBytes: sizeInByte}, nil
 	}

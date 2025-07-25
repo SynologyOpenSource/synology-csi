@@ -1,7 +1,7 @@
 # Copyright 2021 Synology Inc.
 
 ############## Build stage ##############
-FROM golang:1.20.5-alpine as builder
+FROM golang:1.21.4-alpine as builder
 LABEL stage=synobuilder
 
 RUN apk add --no-cache alpine-sdk
@@ -24,7 +24,7 @@ FROM alpine:latest
 LABEL maintainers="Synology Authors" \
       description="Synology CSI Plugin"
 
-RUN apk add --no-cache e2fsprogs e2fsprogs-extra xfsprogs xfsprogs-extra blkid util-linux iproute2 bash btrfs-progs ca-certificates cifs-utils
+RUN apk add --no-cache e2fsprogs e2fsprogs-extra xfsprogs xfsprogs-extra blkid util-linux iproute2 bash btrfs-progs ca-certificates cifs-utils nfs-utils
 
 # Create symbolic link for chroot.sh
 WORKDIR /
