@@ -47,12 +47,19 @@ func BytesToMBCeil(size int64) int64 {
 }
 
 func StringToBoolean(value string) bool {
-	value = strings.ToLower(value)
+	value = strings.ToLower(strings.TrimSpace(value))
 	return value == "yes" || value == "true" || value == "1"
 }
 
 func StringToSlice(value string) []string {
 	return strings.Fields(value)
+}
+
+func BoolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 // Haven't supported IPv6 yet.

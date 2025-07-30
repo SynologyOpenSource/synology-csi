@@ -14,15 +14,16 @@ import (
 )
 
 type LunInfo struct {
-	Name             string `json:"name"`
-	Uuid             string `json:"uuid"`
-	LunType          int    `json:"type"`
-	Location         string `json:"location"`
-	Size             uint64 `json:"size"`
-	Used             uint64 `json:"allocated_size"`
-	Status           string `json:"status"`
-	FlashcacheStatus string `json:"flashcache_status"`
-	IsActionLocked   bool   `json:"is_action_locked"`
+	Name             string         `json:"name"`
+	Uuid             string         `json:"uuid"`
+	LunType          int            `json:"type"`
+	Location         string         `json:"location"`
+	Size             uint64         `json:"size"`
+	Used             uint64         `json:"allocated_size"`
+	Status           string         `json:"status"`
+	FlashcacheStatus string         `json:"flashcache_status"`
+	IsActionLocked   bool           `json:"is_action_locked"`
+	DevAttribs       []LunDevAttrib `json:"dev_attribs"`
 }
 
 type MappedLun struct {

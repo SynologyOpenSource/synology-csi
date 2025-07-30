@@ -81,6 +81,21 @@ func parseNfsVesrion(ops []string) string {
 	return ""
 }
 
+func parseDevAttribs(params map[string]string) (map[string]bool, error) {
+	attribFlags := make(map[string]bool)
+
+	if params["enableSpaceReclamation"] != "" {
+		attribFlags["emulate_tpu"] = utils.StringToBoolean(params["enableSpaceReclamation"])
+	}
+	if params["enableFuaSyncCache"] != "" {
+		enabled := utils.StringToBoolean(params["enableFuaSyncCache"])
+		attribFlags["emulate_fua_write"] = enabled
+		attribFlags["emulate_sync_cache"] = enabled
+	}
+
+	return attribFlags, nil
+}
+
 func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
 	sizeInByte, err := getSizeByCapacityRange(req.GetCapacityRange())
 	volName, volCap := req.GetName(), req.GetVolumeCapabilities()
@@ -155,6 +170,14 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}
 	}
 
+	devAttribs, err := parseDevAttribs(params)
+	if err != nil {
+		return nil, err
+	}
+	if enabled, exists := devAttribs["emulate_tpu"]; exists && enabled && !isThin {
+		return nil, status.Error(codes.InvalidArgument, "Invalid provisioning type: space reclamation only supported for thin LUNs")
+	}
+
 	lunDescription := ""
 	if _, ok := params["csi.storage.k8s.io/pvc/name"]; ok {
 		// if the /pvc/name is present, the namespace is present too
@@ -185,6 +208,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		SourceVolumeId:   srcVolumeId,
 		Protocol:         protocol,
 		NfsVersion:       nfsVer,
+		DevAttribs:       devAttribs,
 	}
 
 	// idempotency
