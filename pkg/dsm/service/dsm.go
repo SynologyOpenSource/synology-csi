@@ -7,27 +7,33 @@ package service
 import (
 	"errors"
 	"fmt"
-
-	"github.com/cenkalti/backoff/v4"
-	log "github.com/sirupsen/logrus"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"strconv"
-	"time"
 	"strings"
+	"time"
+
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/common"
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/webapi"
 	"github.com/SynologyOpenSource/synology-csi/pkg/models"
 	"github.com/SynologyOpenSource/synology-csi/pkg/utils"
+	"github.com/cenkalti/backoff/v4"
+	log "github.com/sirupsen/logrus"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type DsmService struct {
 	dsms map[string]*webapi.DSM
+
+	skipLunPrefix   bool
+	skipSharePrefix bool
 }
 
-func NewDsmService() *DsmService {
+func NewDsmService(skipLunPrefix bool, skipSharePrefix bool) *DsmService {
 	return &DsmService{
 		dsms: make(map[string]*webapi.DSM),
+
+		skipLunPrefix:   skipLunPrefix,
+		skipSharePrefix: skipSharePrefix,
 	}
 }
 
@@ -646,11 +652,30 @@ func (service *DsmService) GetVolume(volId string) *models.K8sVolumeRespSpec {
 	return nil
 }
 
+func (service *DsmService) GenLunName(volName string) string {
+	if service.skipLunPrefix {
+		return volName
+	}
+	return fmt.Sprintf("%s-%s", models.LunPrefix, volName)
+}
+
+func (service *DsmService) GenShareName(volName string) string {
+	log.Infof("GenShareName: %s, skipSharePrefix: %v", volName, service.skipSharePrefix)
+	shareName := volName
+	if !service.skipSharePrefix {
+		shareName = fmt.Sprintf("%s-%s", models.SharePrefix, volName)
+	}
+	if len(shareName) > models.MaxShareLen {
+		return shareName[:models.MaxShareLen]
+	}
+	return shareName
+}
+
 func (service *DsmService) GetVolumeByName(volName string) *models.K8sVolumeRespSpec {
 	volumes := service.ListVolumes()
 	for _, volume := range volumes {
-		if volume.Name == models.GenLunName(volName) ||
-			volume.Name == models.GenShareName(volName) {
+		if volume.Name == service.GenLunName(volName) ||
+			volume.Name == service.GenShareName(volName) {
 			return volume
 		}
 	}

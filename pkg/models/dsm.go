@@ -2,10 +2,6 @@
 
 package models
 
-import (
-	"fmt"
-)
-
 const (
 	K8sCsiName       = "Kubernetes CSI"
 
@@ -33,16 +29,8 @@ const (
 	IqnPrefix               = "iqn.2000-01.com.synology:"
 	SharePrefix             = "k8s-csi"
 	ShareSnapshotDescPrefix = "(Do not change)"
+
+	// CSI parameter definitions
+	CSIPVCName    = "csi.storage.k8s.io/pvc/name"
+	CSIUsePVCName = "use_pvc_name"
 )
-
-func GenLunName(volName string) string {
-	return fmt.Sprintf("%s-%s", LunPrefix, volName)
-}
-
-func GenShareName(volName string) string {
-	shareName := fmt.Sprintf("%s-%s", SharePrefix, volName)
-	if len(shareName) > MaxShareLen {
-		return shareName[:MaxShareLen]
-	}
-	return shareName
-}

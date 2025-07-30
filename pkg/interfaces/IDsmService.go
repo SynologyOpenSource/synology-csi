@@ -27,4 +27,6 @@ type IDsmService interface {
 	ListSnapshots(volId string) []*models.K8sSnapshotRespSpec
 	GetVolumeByName(volName string) *models.K8sVolumeRespSpec
 	GetSnapshotByName(snapshotName string) *models.K8sSnapshotRespSpec
+	GenLunName(volName string) string
+	GenShareName(volName string) string
 }
