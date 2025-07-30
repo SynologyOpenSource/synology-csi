@@ -62,7 +62,7 @@ The Synology CSI driver supports:
         - Create a **default** storage class named "`synology-iscsi-storage`" that uses the "`Retain`" policy.
         - Create a volume snapshot class named "`synology-snapshotclass`" that uses the "`Delete`" policy. (*Full* deployment only)
     * **HELM** (Local Development)
-        1. `kubectl create ns synology-csi`
+        1. `kubectl create ns synology-csi; kubectl label ns synology-csi pod-security.kubernetes.io/enforce=privileged --overwrite`
         2. `kubectl create secret -n synology-csi generic client-info-secret --from-file=./config/client-info.yml`
         3. `cd deploy/helm; make up`
 
