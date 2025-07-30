@@ -1,0 +1,90 @@
+{{- if .Values.snapshotter.enabled }}
+kind: StatefulSet
+apiVersion: apps/v1
+metadata:
+  name: {{ include "synology-csi.fullname" . }}-snapshotter
+  labels:
+    {{- include "synology-csi.labels" . | nindent 4 }}    
+spec:
+  serviceName: "{{ include "synology-csi.fullname" . }}-snapshotter"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "synology-csi.fullname" . }}-snapshotter
+  template:
+    metadata:
+      {{- with .Values.snapshotter.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}      
+      labels:
+        app: {{ include "synology-csi.fullname" . }}-snapshotter
+    spec:
+      serviceAccountName: {{ include "synology-csi.fullname" . }}-snapshotter-sa
+      hostNetwork: true
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.snapshotter.podSecurityContext | nindent 8 }}              
+      containers:
+        - name: csi-snapshotter
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["SYS_ADMIN"]
+            allowPrivilegeEscalation: true
+          image: {{ index .Values "snapshotter" "csi-snapshotter" "image" "repository"}}:{{ index .Values "snapshotter" "csi-snapshotter" "image" "tag"}}
+          args:
+            - --v=5
+            - --csi-address=$(ADDRESS)
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+          imagePullPolicy: {{ index .Values "snapshotter" "csi-snapshotter" "image" "pullPolicy"}}
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+        - name: csi-plugin
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["SYS_ADMIN"]
+            allowPrivilegeEscalation: true
+          image: {{ index .Values "snapshotter" "csi-plugin" "image" "repository"}}:{{ default .Chart.AppVersion (index .Values "snapshotter" "csi-plugin" "image" "tag") }}
+          args:
+            - --nodeid=NotUsed
+            - --endpoint=$(CSI_ENDPOINT)
+            - --client-info
+            - /etc/synology/client-info.yml
+            - --log-level=info
+          env:
+            - name: CSI_ENDPOINT
+              value: unix:///var/lib/csi/sockets/pluginproxy/csi.sock
+          imagePullPolicy: {{ index .Values "snapshotter" "csi-snapshotter" "image" "pullPolicy"}}
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+            - name: client-info
+              mountPath: /etc/synology
+              readOnly: true
+      {{- with .Values.snapshotter.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.snapshotter.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.snapshotter.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}                 
+      volumes:
+        - name: socket-dir
+          emptyDir: {}
+        - name: client-info
+          secret:
+            secretName: {{ .Values.clientInfoSecretName }}
+{{- end }}
