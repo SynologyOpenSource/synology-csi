@@ -24,13 +24,13 @@ import (
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	log "github.com/sirupsen/logrus"
 	"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
+	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"k8s.io/utils/exec"
 	"k8s.io/mount-utils"
+	"k8s.io/utils/exec"
 )
 
 func ParseEndpoint(ep string) (string, string, error) {
@@ -45,7 +45,7 @@ func ParseEndpoint(ep string) (string, string, error) {
 
 func NewControllerServer(d *Driver) *controllerServer {
 	return &controllerServer{
-		Driver: d,
+		Driver:     d,
 		dsmService: d.DsmService,
 	}
 }
@@ -65,17 +65,19 @@ func getK8sClient() clientset.Interface {
 
 func NewNodeServer(d *Driver) *nodeServer {
 	return &nodeServer{
-		Driver: d,
+		Driver:     d,
 		dsmService: d.DsmService,
 		Mounter: &mount.SafeFormatAndMount{
 			Interface: mount.New(""),
-			Exec: exec.New(),
+			Exec:      exec.New(),
 		},
 		Initiator: &initiatorDriver{
-			chapUser: "",
+			chapUser:     "",
 			chapPassword: "",
+			tools:        d.tools,
 		},
 		Client: getK8sClient(),
+		tools:  d.tools,
 	}
 }
 

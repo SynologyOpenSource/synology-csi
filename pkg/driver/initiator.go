@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/SynologyOpenSource/synology-csi/pkg/utils/hostexec"
 	log "github.com/sirupsen/logrus"
 	utilexec "k8s.io/utils/exec"
 )
@@ -31,6 +32,7 @@ import (
 type initiatorDriver struct {
 	chapUser     string
 	chapPassword string
+	tools        tools
 }
 
 type iscsiSession struct {
@@ -45,10 +47,19 @@ const (
 	ISCSIPort = 3260
 )
 
-func iscsiadm(cmdArgs ...string) utilexec.Cmd {
-	executor := utilexec.New()
+type tools struct {
+	executor hostexec.Executor
+}
 
-	return executor.Command("iscsiadm", cmdArgs...)
+// NewTools creates a new tools wrapper for calling utilities with given executor
+func NewTools(executor hostexec.Executor) tools {
+	return tools{
+		executor: executor,
+	}
+}
+
+func (t *tools) iscsiadm(cmdArgs ...string) utilexec.Cmd {
+	return t.executor.Command("iscsiadm", cmdArgs...)
 }
 
 // parseSession takes the raw stdout from the `iscsiadm -m session` command and encodes it into an iSCSI session type
@@ -81,8 +92,8 @@ func parseSessions(lines string) []iscsiSession {
 	return sessions
 }
 
-func iscsiadm_session() []iscsiSession {
-	cmd := iscsiadm("-m", "session")
+func (t *tools) iscsiadm_session() []iscsiSession {
+	cmd := t.iscsiadm("-m", "session")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		exitErr, ok := err.(utilexec.ExitError)
@@ -97,8 +108,8 @@ func iscsiadm_session() []iscsiSession {
 	return parseSessions(string(out))
 }
 
-func iscsiadm_discovery(portal string) error {
-	cmd := iscsiadm(
+func (t *tools) iscsiadm_discovery(portal string) error {
+	cmd := t.iscsiadm(
 		"-m", "discoverydb",
 		"--type", "sendtargets",
 		"--portal", portal,
@@ -110,8 +121,8 @@ func iscsiadm_discovery(portal string) error {
 	return nil
 }
 
-func iscsiadm_login(iqn, portal string) error {
-	cmd := iscsiadm(
+func (t *tools) iscsiadm_login(iqn, portal string) error {
+	cmd := t.iscsiadm(
 		"-m", "node",
 		"--targetname", iqn,
 		"--portal", portal,
@@ -123,8 +134,8 @@ func iscsiadm_login(iqn, portal string) error {
 	return nil
 }
 
-func iscsiadm_update_node_startup(iqn, portal string) error {
-	cmd := iscsiadm(
+func (t *tools) iscsiadm_update_node_startup(iqn, portal string) error {
+	cmd := t.iscsiadm(
 		"-m", "node",
 		"--targetname", iqn,
 		"--portal", portal,
@@ -138,8 +149,8 @@ func iscsiadm_update_node_startup(iqn, portal string) error {
 	return nil
 }
 
-func iscsiadm_logout(iqn string) error {
-	cmd := iscsiadm(
+func (t *tools) iscsiadm_logout(iqn string) error {
+	cmd := t.iscsiadm(
 		"-m", "node",
 		"--targetname", iqn,
 		"--logout")
@@ -149,8 +160,8 @@ func iscsiadm_logout(iqn string) error {
 	return nil
 }
 
-func iscsiadm_rescan(iqn string) error {
-	cmd := iscsiadm(
+func (t *tools) iscsiadm_rescan(iqn string) error {
+	cmd := t.iscsiadm(
 		"-m", "node",
 		"--targetname", iqn,
 		"-R")
@@ -160,8 +171,8 @@ func iscsiadm_rescan(iqn string) error {
 	return nil
 }
 
-func hasSession(targetIqn string, portal string) bool {
-	sessions := iscsiadm_session()
+func (t *tools) hasSession(targetIqn string, portal string) bool {
+	sessions := t.iscsiadm_session()
 
 	for _, s := range sessions {
 		if targetIqn == s.Iqn && (portal == s.Portal || portal == "") {
@@ -172,8 +183,8 @@ func hasSession(targetIqn string, portal string) bool {
 	return false
 }
 
-func listSessionsByIqn(targetIqn string) (matchedSessions []iscsiSession) {
-	sessions := iscsiadm_session()
+func (t *tools) listSessionsByIqn(targetIqn string) (matchedSessions []iscsiSession) {
+	sessions := t.iscsiadm_session()
 
 	for _, s := range sessions {
 		if targetIqn == s.Iqn {
@@ -185,22 +196,22 @@ func listSessionsByIqn(targetIqn string) (matchedSessions []iscsiSession) {
 }
 
 func (d *initiatorDriver) login(targetIqn string, portal string) error {
-	if hasSession(targetIqn, portal) {
+	if d.tools.hasSession(targetIqn, portal) {
 		log.Infof("Session[%s] already exists.", targetIqn)
 		return nil
 	}
 
-	if err := iscsiadm_discovery(portal); err != nil {
+	if err := d.tools.iscsiadm_discovery(portal); err != nil {
 		log.Errorf("Failed in discovery of the target: %v", err)
 		return err
 	}
 
-	if err := iscsiadm_login(targetIqn, portal); err != nil {
+	if err := d.tools.iscsiadm_login(targetIqn, portal); err != nil {
 		log.Errorf("Failed in login of the target: %v", err)
 		return err
 	}
 
-	if err := iscsiadm_update_node_startup(targetIqn, portal); err != nil {
+	if err := d.tools.iscsiadm_update_node_startup(targetIqn, portal); err != nil {
 		log.Warnf("Failed to update target node.startup to manual: %v", err)
 	}
 
@@ -210,13 +221,13 @@ func (d *initiatorDriver) login(targetIqn string, portal string) error {
 }
 
 func (d *initiatorDriver) logout(targetIqn string, ip string) error {
-	if !hasSession(targetIqn, "") {
+	if !d.tools.hasSession(targetIqn, "") {
 		log.Infof("Session[%s] doesn't exist.", targetIqn)
 		return nil
 	}
 
 	portal := fmt.Sprintf("%s:%d", ip, ISCSIPort)
-	if err := iscsiadm_logout(targetIqn); err != nil {
+	if err := d.tools.iscsiadm_logout(targetIqn); err != nil {
 		log.Errorf("Failed in logout of the target.\nTarget [%s], Portal [%s], Err[%v]",
 			targetIqn, portal, err)
 		return err
@@ -228,13 +239,13 @@ func (d *initiatorDriver) logout(targetIqn string, ip string) error {
 }
 
 func (d *initiatorDriver) rescan(targetIqn string) error {
-	if !hasSession(targetIqn, "") {
+	if !d.tools.hasSession(targetIqn, "") {
 		msg := fmt.Sprintf("Session[%s] doesn't exist.", targetIqn)
 		log.Error(msg)
 		return errors.New(msg)
 	}
 
-	if err := iscsiadm_rescan(targetIqn); err != nil {
+	if err := d.tools.iscsiadm_rescan(targetIqn); err != nil {
 		log.Errorf("Failed in rescan of the target.\nTarget [%s], Err[%v]",
 			targetIqn, err)
 		return err

@@ -28,12 +28,12 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"golang.org/x/sys/unix"
-	"k8s.io/mount-utils"
-	clientset "k8s.io/client-go/kubernetes"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clientset "k8s.io/client-go/kubernetes"
+	"k8s.io/mount-utils"
 
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/webapi"
 	"github.com/SynologyOpenSource/synology-csi/pkg/interfaces"
@@ -47,6 +47,7 @@ type nodeServer struct {
 	dsmService interfaces.IDsmService
 	Initiator  *initiatorDriver
 	Client     clientset.Interface
+	tools      tools
 }
 
 func waitForDevicePathToExist(path string) error {
@@ -73,10 +74,10 @@ func waitForDevicePathToExist(path string) error {
 }
 
 // for unstage, resize volume
-func getExistedVolumeMountPath(targetIqn string, mappingIndex int) string {
+func (t *tools) getExistedVolumeMountPath(targetIqn string, mappingIndex int) string {
 	paths := []string{}
 
-	sessions := listSessionsByIqn(targetIqn)
+	sessions := t.listSessionsByIqn(targetIqn)
 	for _, session := range sessions {
 		paths = append(paths, fmt.Sprintf("%sip-%s-iscsi-%s-lun-%d", "/dev/disk/by-path/", session.Portal, targetIqn, mappingIndex))
 	}
@@ -175,7 +176,7 @@ func (ns *nodeServer) getPortals(dsmIp string) []string {
 		portals = append(portals, fmt.Sprintf("%s:%d", ips[0], ISCSIPort)) //get the first ip
 	}
 
-	if dsm.IsUC() && IsMultipathEnabled() {
+	if dsm.IsUC() && ns.tools.IsMultipathEnabled() {
 		dsm2, err := dsm.GetAnotherController()
 		if err != nil {
 			log.Errorf("[%s] UC failed to get another controller: %v", err)
@@ -228,10 +229,10 @@ func (ns *nodeServer) logoutTarget(volumeId string) {
 
 	// Assume target and lun 1-1 mapping
 	mappingIndex := k8sVolume.Target.MappedLuns[0].MappingIndex
-	volumeMountPath := getExistedVolumeMountPath(k8sVolume.Target.Iqn, mappingIndex)
+	volumeMountPath := ns.tools.getExistedVolumeMountPath(k8sVolume.Target.Iqn, mappingIndex)
 
-	if strings.Contains(volumeMountPath, "/dev/mapper") && IsMultipathEnabled() {
-		if err := multipath_flush(volumeMountPath); err != nil {
+	if strings.Contains(volumeMountPath, "/dev/mapper") && ns.tools.IsMultipathEnabled() {
+		if err := ns.tools.multipath_flush(volumeMountPath); err != nil {
 			log.Errorf("Failed to remove multipath device in path %s. err: %v", volumeMountPath, err)
 		}
 	}
@@ -567,7 +568,7 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	if req.VolumeContext["protocol"] == utils.ProtocolNfs {
 		options = append(options, req.GetVolumeCapability().GetMount().GetMountFlags()...)
 
-		var server, baseDir string //NFSTODO: subDir
+		var server, baseDir string             //NFSTODO: subDir
 		var mountPermissionsUint uint64 = 0750 // default
 		for k, v := range req.GetVolumeContext() {
 			switch k {
@@ -804,13 +805,13 @@ func (ns *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 
 	// Assume target and lun 1-1 mapping
 	mappingIndex := k8sVolume.Target.MappedLuns[0].MappingIndex
-	volumeMountPath := getExistedVolumeMountPath(k8sVolume.Target.Iqn, mappingIndex)
+	volumeMountPath := ns.tools.getExistedVolumeMountPath(k8sVolume.Target.Iqn, mappingIndex)
 	if volumeMountPath == "" {
 		return nil, status.Error(codes.Internal, "Can't get volume mount path")
 	}
 
-	if strings.Contains(volumeMountPath, "/dev/mapper") && IsMultipathEnabled() {
-		if err := multipath_resize(filepath.Base(volumeMountPath)); err != nil {
+	if strings.Contains(volumeMountPath, "/dev/mapper") && ns.tools.IsMultipathEnabled() {
+		if err := ns.tools.multipath_resize(filepath.Base(volumeMountPath)); err != nil {
 			return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to resize multipath device in %s. err: %v", volumeMountPath, err))
 		}
 	}

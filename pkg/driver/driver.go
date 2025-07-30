@@ -17,19 +17,19 @@ limitations under the License.
 package driver
 
 import (
-	"github.com/container-storage-interface/spec/lib/go/csi"
-	log "github.com/sirupsen/logrus"
 	"github.com/SynologyOpenSource/synology-csi/pkg/interfaces"
 	"github.com/SynologyOpenSource/synology-csi/pkg/utils"
+	"github.com/container-storage-interface/spec/lib/go/csi"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
-	DriverName = "csi.san.synology.com" // CSI dirver name
+	DriverName    = "csi.san.synology.com" // CSI dirver name
 	DriverVersion = "1.2.0"
 )
 
 var (
-	MultipathEnabled = true
+	MultipathEnabled      = true
 	supportedProtocolList = []string{utils.ProtocolIscsi, utils.ProtocolSmb, utils.ProtocolNfs}
 	allowedNfsVersionList = []string{"3", "4", "4.0", "4.1"}
 )
@@ -44,13 +44,14 @@ type Driver struct {
 	nodeID     string
 	version    string
 	endpoint   string
+	tools      tools
 	csCap      []*csi.ControllerServiceCapability
 	vCap       []*csi.VolumeCapability_AccessMode
 	nsCap      []*csi.NodeServiceCapability
 	DsmService interfaces.IDsmService
 }
 
-func NewControllerAndNodeDriver(nodeID string, endpoint string, dsmService interfaces.IDsmService) (*Driver, error) {
+func NewControllerAndNodeDriver(nodeID string, endpoint string, dsmService interfaces.IDsmService, tools tools) (*Driver, error) {
 	log.Debugf("NewControllerAndNodeDriver: DriverName: %v, DriverVersion: %v", DriverName, DriverVersion)
 
 	// TODO version format and validation
@@ -60,6 +61,7 @@ func NewControllerAndNodeDriver(nodeID string, endpoint string, dsmService inter
 		nodeID:     nodeID,
 		endpoint:   endpoint,
 		DsmService: dsmService,
+		tools:      tools,
 	}
 
 	d.addControllerServiceCapabilities([]csi.ControllerServiceCapability_RPC_Type{
