@@ -25,6 +25,13 @@ type ShareDefaultError struct {
 	ErrCode int
 }
 
+type NoSuchNamespaceError string
+type SanReachMaxCountError string
+type FailedToGetSubsystemError string
+type SanDefaultError struct {
+	ErrCode int
+}
+
 func (_ OutOfFreeSpaceError) Error() string {
 	return "Out of free space"
 }
@@ -79,4 +86,21 @@ func (_ ShareSystemBusyError) Error() string {
 
 func (e ShareDefaultError) Error() string {
 	return fmt.Sprintf("Share API error. Error code: %d", e.ErrCode)
+}
+
+// San errors
+func (_ NoSuchNamespaceError) Error() string {
+	return "No such namespace"
+}
+
+func (_ SanReachMaxCountError) Error() string {
+	return "Reach max count"
+}
+
+func (_ FailedToGetSubsystemError) Error() string {
+	return "Failed to get subsystem"
+}
+
+func (e SanDefaultError) Error() string {
+	return fmt.Sprintf("San API error. Error code: %d", e.ErrCode)
 }

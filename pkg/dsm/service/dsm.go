@@ -49,8 +49,12 @@ func (service *DsmService) AddDsm(client common.ClientInfo) error {
 	if err != nil {
 		return fmt.Errorf("Failed to login to DSM: [%s]. err: %v", dsm.Ip, err)
 	}
+	if err := dsm.FillSystemInfo(); err != nil {
+		return fmt.Errorf("Failed to get system info of DSM: [%s]. err: %v", dsm.Ip, err)
+	}
+
 	service.dsms[dsm.Ip] = dsm
-	log.Infof("Add DSM [%s].", dsm.Ip)
+	log.Infof("Add DSM [%s] hostname: %s.", dsm.Ip, dsm.Hostname)
 	return nil
 }
 
@@ -154,14 +158,8 @@ func getLunTypeByInputParams(lunType string, isThin bool, locationFsType string)
 }
 
 func (service *DsmService) createMappingTarget(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, lunUuid string) (webapi.TargetInfo, error) {
-	dsmInfo, err := dsm.DsmInfoGet()
-
-	if err != nil {
-		return webapi.TargetInfo{}, status.Errorf(codes.Internal, fmt.Sprintf("Failed to get DSM[%s] info", dsm.Ip));
-	}
-
 	genTargetIqn := func() string {
-		iqn := models.IqnPrefix + fmt.Sprintf("%s.%s", dsmInfo.Hostname, spec.K8sVolumeName)
+		iqn := models.IqnPrefix + fmt.Sprintf("%s.%s", dsm.Hostname, spec.K8sVolumeName)
 		iqn = strings.ReplaceAll(iqn, "_", "-")
 		iqn = strings.ReplaceAll(iqn, "+", "p")
 
@@ -236,8 +234,8 @@ func (service *DsmService) createVolumeByDsm(dsm *webapi.DSM, spec *models.Creat
 
 	// 3. Create LUN
 	lunSpec := webapi.LunCreateSpec{
-		Name:        spec.LunName,
-		Description: spec.LunDescription,
+		Name:        spec.BackendName,
+		Description: spec.Description,
 		Location:    spec.Location,
 		Size:        spec.Size,
 		Type:        lunType,
@@ -253,11 +251,11 @@ func (service *DsmService) createVolumeByDsm(dsm *webapi.DSM, spec *models.Creat
 	}
 
 	// No matter lun existed or not, Get Lun by name
-	lunInfo, err := dsm.LunGet(spec.LunName)
+	lunInfo, err := dsm.LunGet(spec.BackendName)
 	if err != nil {
 		return nil,
 			// discussion with log
-			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get existed LUN with name: %s, err: %v", spec.LunName, err))
+			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get existed LUN with name: %s, err: %v", spec.BackendName, err))
 	}
 
 	// 4. Create Target and Map to Lun
@@ -273,27 +271,43 @@ func (service *DsmService) createVolumeByDsm(dsm *webapi.DSM, spec *models.Creat
 	return DsmLunToK8sVolume(dsm.Ip, lunInfo, targetInfo), nil
 }
 
-func waitCloneFinished(dsm *webapi.DSM, lunName string) error {
+func waitCloneFinished(dsm *webapi.DSM, name string, protocol string) error {
 	cloneBackoff := backoff.NewExponentialBackOff()
 	cloneBackoff.InitialInterval = 1 * time.Second
 	cloneBackoff.Multiplier = 2
 	cloneBackoff.RandomizationFactor = 0.1
 	cloneBackoff.MaxElapsedTime = 20 * time.Second
 
-	checkFinished := func() error {
-		lunInfo, err := dsm.LunGet(lunName)
-		if err != nil {
-			return backoff.Permanent(fmt.Errorf("Failed to get existed LUN with name: %s, err: %v", lunName, err))
-		}
+	backendTypeStr := "Lun"
+	if protocol == utils.ProtocolNvme {
+		backendTypeStr = "Namespace"
+	}
 
-		if lunInfo.IsActionLocked != false {
-			return fmt.Errorf("Clone not yet completed. Lun: %s", lunName)
+	checkFinished := func() error {
+		if protocol == utils.ProtocolIscsi {
+			lunInfo, err := dsm.LunGet(name)
+			if err != nil {
+				return backoff.Permanent(fmt.Errorf("Failed to get existed LUN with name: %s, err: %v", name, err))
+			}
+
+			if lunInfo.IsActionLocked != false {
+				return fmt.Errorf("Clone not yet completed. Lun: %s", name)
+			}
+		} else if protocol == utils.ProtocolNvme {
+			nsInfo, err := dsm.NamespaceGet(name)
+			if err != nil {
+				return backoff.Permanent(fmt.Errorf("Failed to get existed Namespace with name: %s, err: %v", name, err))
+			}
+
+			if nsInfo.IsActionLocked != false {
+				return fmt.Errorf("Clone not yet completed. Namespace: %s", name)
+			}
 		}
 		return nil
 	}
 
 	cloneNotify := func(err error, duration time.Duration) {
-		log.Infof("Lun is being locked for lun clone, waiting %3.2f seconds .....", float64(duration.Seconds()))
+		log.Infof("%s is being locked for clone, waiting %3.2f seconds .....", backendTypeStr, float64(duration.Seconds()))
 	}
 
 	if err := backoff.RetryNotify(checkFinished, cloneBackoff, cloneNotify); err != nil {
@@ -301,7 +315,7 @@ func waitCloneFinished(dsm *webapi.DSM, lunName string) error {
 		return err
 	}
 
-	log.Debugf("Clone successfully. Lun: %v", lunName)
+	log.Debugf("Clone successfully. %s: %v", backendTypeStr, name)
 	return nil
 }
 
@@ -311,8 +325,8 @@ func (service *DsmService) createVolumeBySnapshot(dsm *webapi.DSM, spec *models.
 	}
 
 	snapshotCloneSpec := webapi.SnapshotCloneSpec{
-		Name:            spec.LunName,
-		SrcLunUuid:      srcSnapshot.ParentUuid,
+		Name:            spec.BackendName,
+		SrcUuid:         srcSnapshot.ParentUuid,
 		SrcSnapshotUuid: srcSnapshot.Uuid,
 	}
 
@@ -321,14 +335,14 @@ func (service *DsmService) createVolumeBySnapshot(dsm *webapi.DSM, spec *models.
 			status.Errorf(codes.Internal, fmt.Sprintf("Failed to create volume with source snapshot ID: %s, err: %v", srcSnapshot.Uuid, err))
 	}
 
-	if err := waitCloneFinished(dsm, spec.LunName); err != nil {
+	if err := waitCloneFinished(dsm, spec.BackendName, spec.Protocol); err != nil {
 		return nil, status.Errorf(codes.Internal, err.Error())
 	}
 
-	lunInfo, err := dsm.LunGet(spec.LunName)
+	lunInfo, err := dsm.LunGet(spec.BackendName)
 	if err != nil {
 		return nil,
-			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get existed LUN with name: %s, err: %v", spec.LunName, err))
+			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get existed LUN with name: %s, err: %v", spec.BackendName, err))
 	}
 
 	targetInfo, err := service.createMappingTarget(dsm, spec, lunInfo.Uuid)
@@ -353,7 +367,7 @@ func (service *DsmService) createVolumeByVolume(dsm *webapi.DSM, spec *models.Cr
 	}
 
 	lunCloneSpec := webapi.LunCloneSpec{
-		Name:            spec.LunName,
+		Name:            spec.BackendName,
 		SrcLunUuid:      srcLunInfo.Uuid,
 		Location:        spec.Location,
 	}
@@ -363,14 +377,14 @@ func (service *DsmService) createVolumeByVolume(dsm *webapi.DSM, spec *models.Cr
 			status.Errorf(codes.Internal, fmt.Sprintf("Failed to create volume with source volume ID: %s, err: %v", srcLunInfo.Uuid, err))
 	}
 
-	if err := waitCloneFinished(dsm, spec.LunName); err != nil {
+	if err := waitCloneFinished(dsm, spec.BackendName, spec.Protocol); err != nil {
 		return nil, status.Errorf(codes.Internal, err.Error())
 	}
 
-	lunInfo, err := dsm.LunGet(spec.LunName)
+	lunInfo, err := dsm.LunGet(spec.BackendName)
 	if err != nil {
 		return nil,
-			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get existed LUN with name: %s, err: %v", spec.LunName, err))
+			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get existed LUN with name: %s, err: %v", spec.BackendName, err))
 	}
 
 	targetInfo, err := service.createMappingTarget(dsm, spec, lunInfo.Uuid)
@@ -418,6 +432,20 @@ func DsmLunToK8sVolume(dsmIp string, info webapi.LunInfo, targetInfo webapi.Targ
 		Protocol: utils.ProtocolIscsi,
 		Lun: info,
 		Target: targetInfo,
+	}
+}
+
+func DsmNamespaceToK8sVolume(dsmIp string, info webapi.NamespaceInfo, subsystemInfo webapi.SubsystemInfo) *models.K8sVolumeRespSpec {
+	return &models.K8sVolumeRespSpec{
+		DsmIp: dsmIp,
+		VolumeId: info.Uuid,
+		SizeInBytes: int64(info.Size),
+		Location: info.Location,
+		Name: info.Name,
+		Source: "",
+		Protocol: utils.ProtocolNvme,
+		Namespace: info,
+		Subsystem: subsystemInfo,
 	}
 }
 
@@ -475,6 +503,8 @@ func (service *DsmService) CreateVolume(spec *models.CreateK8sVolumeSpec) (*mode
 
 		if spec.Protocol == utils.ProtocolIscsi {
 			return service.createVolumeByVolume(dsm, spec, k8sVolume.Lun)
+		} else if spec.Protocol == utils.ProtocolNvme {
+			return service.createNVMeVolumeByVolume(dsm, spec, k8sVolume.Namespace)
 		} else if spec.Protocol == utils.ProtocolSmb || spec.Protocol == utils.ProtocolNfs {
 			return service.createSMBorNFSVolumeByVolume(dsm, spec, k8sVolume.Share)
 		}
@@ -515,6 +545,8 @@ func (service *DsmService) CreateVolume(spec *models.CreateK8sVolumeSpec) (*mode
 
 		if spec.Protocol == utils.ProtocolIscsi {
 			return service.createVolumeBySnapshot(dsm, spec, snapshot)
+		} else if spec.Protocol == utils.ProtocolNvme {
+			return service.createNVMeVolumeBySnapshot(dsm, spec, snapshot)
 		} else if spec.Protocol == utils.ProtocolSmb || spec.Protocol == utils.ProtocolNfs {
 			return service.createSMBorNFSVolumeBySnapshot(dsm, spec, snapshot)
 		}
@@ -531,6 +563,11 @@ func (service *DsmService) CreateVolume(spec *models.CreateK8sVolumeSpec) (*mode
 		var err error
 		if spec.Protocol == utils.ProtocolIscsi {
 			k8sVolume, err = service.createVolumeByDsm(dsm, spec)
+		} else if spec.Protocol == utils.ProtocolNvme {
+			if !dsm.SupportNvmeof {
+				continue
+			}
+			k8sVolume, err = service.createNVMeVolumeByDsm(dsm, spec)
 		} else if spec.Protocol == utils.ProtocolSmb {
 			k8sVolume, err = service.createSMBorNFSVolumeByDsm(dsm, spec)
 		} else if spec.Protocol == utils.ProtocolNfs {
@@ -566,6 +603,27 @@ func (service *DsmService) DeleteVolume(volId string) error {
 	if k8sVolume.Protocol == utils.ProtocolSmb || k8sVolume.Protocol == utils.ProtocolNfs {
 		if err := dsm.ShareDelete(k8sVolume.Share.Name); err != nil {
 			log.Errorf("[%s] Failed to delete Share(%s): %v", dsm.Ip, k8sVolume.Share.Name, err)
+			return err
+		}
+	} else if k8sVolume.Protocol == utils.ProtocolNvme {
+		if !dsm.SupportNvmeof { // should not enter here
+			return status.Errorf(codes.Internal, "[BUG] [%s] volume protocol = nvme, but DSM doesn't support nmveof", dsm.Ip)
+		}
+
+		namespace, subsystem := k8sVolume.Namespace, k8sVolume.Subsystem
+		if err := dsm.NamespaceDelete(namespace.Uuid); err != nil {
+			if  _, err := dsm.NamespaceGet(namespace.Uuid); err != nil && errors.Is(err, utils.NoSuchNamespaceError("")) {
+				return nil
+			}
+			log.Errorf("[%s] Failed to delete Namespace(%s): %v", dsm.Ip, namespace.Uuid, err)
+			return err
+		}
+
+		if err := dsm.SubsystemDelete(subsystem.Uuid); err != nil {
+			if  _, err := dsm.SubsystemGet(subsystem.Uuid); err != nil && errors.Is(err, utils.FailedToGetSubsystemError("")) {
+				return nil
+			}
+			log.Errorf("[%s] Failed to delete Subsystem(%d): %v", dsm.Ip, subsystem.Uuid, err)
 			return err
 		}
 	} else {
@@ -616,7 +674,7 @@ func (service *DsmService) listISCSIVolumes(dsmIp string) (infos []*models.K8sVo
 					log.Errorf("[%s] Failed to get LUN(%s): %v", dsm.Ip, mapping.LunUuid, err)
 				}
 
-				if !strings.HasPrefix(lun.Name, models.LunPrefix) {
+				if !strings.HasPrefix(lun.Name, models.DevicePrefix) {
 					continue
 				}
 
@@ -631,6 +689,7 @@ func (service *DsmService) listISCSIVolumes(dsmIp string) (infos []*models.K8sVo
 func (service *DsmService) ListVolumes() (infos []*models.K8sVolumeRespSpec) {
 	infos = append(infos, service.listISCSIVolumes("")...)
 	infos = append(infos, service.listSMBorNFSVolumes("")...)
+	infos = append(infos, service.listNVMeVolumes("")...)
 
 	return infos
 }
@@ -649,7 +708,7 @@ func (service *DsmService) GetVolume(volId string) *models.K8sVolumeRespSpec {
 func (service *DsmService) GetVolumeByName(volName string) *models.K8sVolumeRespSpec {
 	volumes := service.ListVolumes()
 	for _, volume := range volumes {
-		if volume.Name == models.GenLunName(volName) ||
+		if volume.Name == models.GenBackendName(volName) ||
 			volume.Name == models.GenShareName(volName) {
 			return volume
 		}
@@ -694,6 +753,19 @@ func (service *DsmService) ExpandVolume(volId string, newSize int64) (*models.K8
 		}
 		// convert MB to bytes, may be diff from the input newSize
 		k8sVolume.SizeInBytes = utils.MBToBytes(newSizeInMB)
+	} else if k8sVolume.Protocol == utils.ProtocolNvme {
+		if !dsm.SupportNvmeof { // should not enter here
+			return nil, status.Errorf(codes.Internal, "[BUG] [%s] volume protocol = nvme, but DSM doesn't support nmveof", dsm.Ip)
+		}
+
+		spec := webapi.NamespaceSetSpec{
+			Uuid: volId,
+			NewSize: uint64(newSize),
+		}
+		if err := dsm.NamespaceSet(spec); err != nil {
+			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to expand volume[%s]. err: %v", volId, err))
+		}
+		k8sVolume.SizeInBytes = newSize
 	} else {
 		spec := webapi.LunUpdateSpec{
 			Uuid: volId,
@@ -724,7 +796,7 @@ func (service *DsmService) CreateSnapshot(spec *models.CreateK8sVolumeSnapshotSp
 	if k8sVolume.Protocol == utils.ProtocolIscsi {
 		snapshotSpec := webapi.SnapshotCreateSpec{
 			Name:    spec.SnapshotName,
-			LunUuid: srcVolId,
+			SrcUuid: srcVolId,
 			Description: spec.Description,
 			TakenBy: spec.TakenBy,
 			IsLocked: spec.IsLocked,
@@ -763,6 +835,32 @@ func (service *DsmService) CreateSnapshot(spec *models.CreateK8sVolumeSnapshotSp
 		}
 		return nil, status.Errorf(codes.NotFound, fmt.Sprintf("Failed to get %s snapshot (%s, %s). Not found",
 			k8sVolume.Protocol, snapshotTime, srcVolId))
+	} else if k8sVolume.Protocol == utils.ProtocolNvme {
+		if !dsm.SupportNvmeof { // should not enter here
+			return nil, status.Errorf(codes.Internal, "[BUG] [%s] volume protocol = nvme, but DSM doesn't support nmveof", dsm.Ip)
+		}
+
+		snapshotSpec := webapi.SnapshotCreateSpec{
+			Name:    spec.SnapshotName,
+			SrcUuid: srcVolId,
+			Description: spec.Description,
+			TakenBy: spec.TakenBy,
+			IsLocked: spec.IsLocked,
+		}
+		snapshotUuid, err := dsm.NamespaceSnapshotCreate(snapshotSpec)
+		if err != nil {
+			if err == utils.OutOfFreeSpaceError("") || err == utils.SnapshotReachMaxCountError("") {
+				return nil,status.Errorf(codes.ResourceExhausted, fmt.Sprintf("Failed to NamespaceSnapshotCreate(%s), err: %v", srcVolId, err))
+			}
+			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to NamespaceSnapshotCreate(%s), err: %v", srcVolId, err))
+		}
+
+		snapshotInfo, err := dsm.NamespaceSnapshotGet(snapshotUuid)
+		if err != nil {
+			return nil, status.Errorf(codes.NotFound, fmt.Sprintf("Failed to get nvme snapshot (%s). Not found", snapshotUuid))
+		}
+
+		return DsmSanSnapshotToK8sSnapshot(dsm.Ip, *snapshotInfo, utils.ProtocolNvme), nil
 	}
 
 	return nil, status.Error(codes.InvalidArgument, "Unsupported volume protocol")
@@ -799,11 +897,24 @@ func (service *DsmService) DeleteSnapshot(snapshotUuid string) error {
 		}
 	} else if snapshot.Protocol == utils.ProtocolIscsi {
 		if err := dsm.SnapshotDelete(snapshotUuid); err != nil {
-			if _, err := dsm.SnapshotGet(snapshotUuid); err != nil { // idempotency
+			if _, err := dsm.SnapshotGet(snapshotUuid); err != nil && errors.Is(err, utils.NoSuchSnapshotError("")) { // idempotency
 				return nil
 			}
 
 			log.Errorf("Failed to delete LUN snapshot [%s]. err: %v", snapshotUuid, err)
+			return err
+		}
+	} else if snapshot.Protocol == utils.ProtocolNvme {
+		if !dsm.SupportNvmeof { // should not enter here
+			return status.Errorf(codes.Internal, "[BUG] [%s] snapshot protocol = nvme, but DSM doesn't support nmveof", dsm.Ip)
+		}
+
+		if err := dsm.NamespaceSnapshotDelete(snapshotUuid); err != nil {
+			if _, err := dsm.NamespaceSnapshotGet(snapshotUuid); err != nil && errors.Is(err, utils.NoSuchSnapshotError("")) { // idempotency
+				return nil
+			}
+
+			log.Errorf("Failed to delete Namespace snapshot [%s]. err: %v", snapshotUuid, err)
 			return err
 		}
 	}
@@ -822,7 +933,7 @@ func (service *DsmService) listISCSISnapshotsByDsm(dsm *webapi.DSM) (infos []*mo
 		}
 
 		for _, info := range lunSnaps {
-			infos = append(infos, DsmLunSnapshotToK8sSnapshot(dsm.Ip, info, lunInfo))
+			infos = append(infos, DsmSanSnapshotToK8sSnapshot(dsm.Ip, info, utils.ProtocolIscsi))
 		}
 	}
 	return
@@ -834,6 +945,7 @@ func (service *DsmService) ListAllSnapshots() []*models.K8sSnapshotRespSpec {
 	for _, dsm := range service.dsms {
 		allInfos = append(allInfos, service.listISCSISnapshotsByDsm(dsm)...)
 		allInfos = append(allInfos, service.listSMBorNFSSnapshotsByDsm(dsm)...)
+		allInfos = append(allInfos, service.listNVMeSnapshotsByDsm(dsm)...)
 	}
 
 	return allInfos
@@ -860,7 +972,16 @@ func (service *DsmService) ListSnapshots(volId string) []*models.K8sSnapshotResp
 			return nil
 		}
 		for _, info := range infos {
-			allInfos = append(allInfos, DsmLunSnapshotToK8sSnapshot(dsm.Ip, info, k8sVolume.Lun))
+			allInfos = append(allInfos, DsmSanSnapshotToK8sSnapshot(dsm.Ip, info, k8sVolume.Protocol))
+		}
+	} else if dsm.SupportNvmeof && k8sVolume.Protocol == utils.ProtocolNvme {
+		infos, err := dsm.NamespaceSnapshotList(volId)
+		if err != nil {
+			log.Errorf("Failed to NamespaceSnapshotList[%s]", volId)
+			return nil
+		}
+		for _, info := range infos {
+			allInfos = append(allInfos, DsmSanSnapshotToK8sSnapshot(dsm.Ip, info, k8sVolume.Protocol))
 		}
 	} else {
 		infos, err := dsm.ShareSnapshotList(k8sVolume.Share.Name)
@@ -892,19 +1013,19 @@ func DsmShareSnapshotToK8sSnapshot(dsmIp string, info webapi.ShareSnapshotInfo, 
 	}
 }
 
-func DsmLunSnapshotToK8sSnapshot(dsmIp string, info webapi.SnapshotInfo, lunInfo webapi.LunInfo) *models.K8sSnapshotRespSpec {
+func DsmSanSnapshotToK8sSnapshot(dsmIp string, info webapi.SnapshotInfo, protocol string) *models.K8sSnapshotRespSpec {
 	return &models.K8sSnapshotRespSpec{
 		DsmIp: dsmIp,
 		Name: info.Name,
 		Uuid: info.Uuid,
-		ParentName: lunInfo.Name, // it can be empty for iscsi
+		ParentName: "", // it can be empty for iscsi/nvme
 		ParentUuid: info.ParentUuid,
 		Status: info.Status,
 		SizeInBytes: info.TotalSize,
 		CreateTime: info.CreateTime,
 		Time: "",
 		RootPath: info.RootPath,
-		Protocol: utils.ProtocolIscsi,
+		Protocol: protocol,
 	}
 }
 

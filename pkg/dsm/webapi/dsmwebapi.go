@@ -25,6 +25,13 @@ type DSM struct {
 	Sid        string
 	Https      bool
 	Controller string //new
+	SystemInfo
+}
+
+type SystemInfo struct {
+	Hostname      string
+	SupportNvmeof bool
+	FirmwareVer   string
 }
 
 type errData struct {

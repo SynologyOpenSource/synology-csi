@@ -85,6 +85,37 @@ func (t *tools) getExistedVolumeMountPath(targetIqn string, mappingIndex int) st
 	return getVolumeMountPath(paths)
 }
 
+func getExistedNvmeDevPath(subsysNqn string, uuid string) string {
+	deadline := time.Now().Add(10 * time.Second)
+
+	var list []Namespace
+	for {
+		tmp, err := listNamespacesFromSysfs(subsysNqn)
+		if err == nil && len(tmp) > 0 {
+			list = tmp
+			break
+		}
+		if time.Now().After(deadline) {
+			log.Errorf("Timed out waiting for namespace for subsystem %s.", subsysNqn)
+			return ""
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	for _, l := range list {
+		if l.Uuid == uuid {
+			path := l.DevPath
+			if err := waitForDevicePathToExist(path); err != nil {
+				log.Errorf("Can't find device path [%s]: %v", path, err)
+				return ""
+			}
+			return path
+		}
+	}
+
+	return ""
+}
+
 // for publish, stage volume
 func getVolumeMountPath(iscsiDevPaths []string) string {
 	var path string
@@ -187,6 +218,54 @@ func (ns *nodeServer) getPortals(dsmIp string) []string {
 	return portals
 }
 
+func (ns *nodeServer) loginNVMeSubsystem(volumeId string) ([]string, error) {
+	paths := []string{}
+	k8sVolume := ns.dsmService.GetVolume(volumeId)
+
+	if k8sVolume == nil {
+		return nil, status.Error(codes.NotFound, fmt.Sprintf("Volume[%s] is not found", volumeId))
+	}
+
+	subsysNqn := k8sVolume.Subsystem.Nqn
+	if subsysNqn == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "NVMe subsystem NQN is empty for volume %s", volumeId)
+	}
+
+	var targetIp string
+	ips, err := utils.LookupIPv4(k8sVolume.DsmIp)
+	if err != nil {
+		log.Error(err)
+		targetIp = k8sVolume.DsmIp
+	} else {
+		targetIp = ips[0]
+	}
+
+	if !hasNVMeSession(targetIp, NVMePort, "tcp", subsysNqn) {
+		if err := ns.tools.nvmeConnect(targetIp, NVMePort, "tcp", subsysNqn, ""); err != nil {
+			return nil, status.Errorf(codes.Internal, "Failed to connect to NVMe subsystem %s at %s:%d: %v", subsysNqn, targetIp, NVMePort, err)
+		}
+	}
+
+	path := getExistedNvmeDevPath(subsysNqn, volumeId)
+	if path == "" {
+		return nil, status.Errorf(codes.Internal, "Can't find nvme device path for volume %s", volumeId)
+	}
+
+	paths = append(paths, path)
+
+	return paths, nil
+}
+
+func (ns *nodeServer) logoutNVMeSubsystem(nqn string) {
+	if nqn == "" {
+		return
+	}
+
+	if err := ns.tools.nvmeDisconnect(nqn); err != nil {
+		log.Errorf("Failed to disconnect NVMe subsystem [%s]: %v", nqn, err)
+	}
+}
+
 func (ns *nodeServer) loginTarget(volumeId string) ([]string, error) {
 	paths := []string{}
 	k8sVolume := ns.dsmService.GetVolume(volumeId)
@@ -197,7 +276,7 @@ func (ns *nodeServer) loginTarget(volumeId string) ([]string, error) {
 
 	portals := ns.getPortals(k8sVolume.DsmIp)
 	if len(portals) == 0 {
-		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to get portals"))
+		return nil, status.Errorf(codes.Internal, "Failed to get portals")
 	}
 
 	// Assume target and lun 1-1 mapping
@@ -220,10 +299,8 @@ func (ns *nodeServer) loginTarget(volumeId string) ([]string, error) {
 	return paths, nil
 }
 
-func (ns *nodeServer) logoutTarget(volumeId string) {
-	k8sVolume := ns.dsmService.GetVolume(volumeId)
-
-	if k8sVolume == nil || k8sVolume.Protocol != utils.ProtocolIscsi {
+func (ns *nodeServer) logoutTarget(k8sVolume *models.K8sVolumeRespSpec) {
+	if k8sVolume == nil {
 		return
 	}
 
@@ -487,6 +564,44 @@ func (ns *nodeServer) nodeStageNFSVolume(ctx context.Context, spec *models.NodeS
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 
+func (ns *nodeServer) nodeStageNVMeVolume(ctx context.Context, spec *models.NodeStageVolumeSpec) (*csi.NodeStageVolumeResponse, error) {
+	// if block mode, skip mount
+	if spec.VolumeCapability.GetBlock() != nil {
+		return &csi.NodeStageVolumeResponse{}, nil
+	}
+
+	nvmeDevPaths, err := ns.loginNVMeSubsystem(spec.VolumeId)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	//TODO: multipath
+	volumeMountPath := nvmeDevPaths[0]
+	if volumeMountPath == "" {
+		return nil, status.Error(codes.Internal, "Can't get volume mount path")
+	}
+
+	notMount, err := ns.Mounter.Interface.IsLikelyNotMountPoint(spec.StagingTargetPath)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	if !notMount {
+		return &csi.NodeStageVolumeResponse{}, nil
+	}
+
+	fsType := spec.VolumeCapability.GetMount().GetFsType()
+	options := append([]string{"rw"}, spec.VolumeCapability.GetMount().GetMountFlags()...)
+
+	formatOptions := utils.StringToSlice(spec.FormatOptions)
+
+	if err = ns.Mounter.FormatAndMountSensitiveWithFormatOptions(volumeMountPath, spec.StagingTargetPath, fsType, options, nil, formatOptions); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	return &csi.NodeStageVolumeResponse{}, nil
+}
+
 func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
 	volumeId, stagingTargetPath, volumeCapability :=
 		req.GetVolumeId(), req.GetStagingTargetPath(), req.GetVolumeCapability()
@@ -514,15 +629,17 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		return ns.nodeStageSMBVolume(ctx, spec, req.GetSecrets())
 	case utils.ProtocolNfs:
 		return ns.nodeStageNFSVolume(ctx, spec)
+	case utils.ProtocolNvme:
+		return ns.nodeStageNVMeVolume(ctx, spec)
 	default:
 		return ns.nodeStageISCSIVolume(ctx, spec)
 	}
 }
 
 func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
-	volumeID, stagingTargetPath := req.GetVolumeId(), req.GetStagingTargetPath()
+	volumeId, stagingTargetPath := req.GetVolumeId(), req.GetStagingTargetPath()
 
-	if volumeID == "" {
+	if volumeId == "" {
 		return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
 	}
 	if stagingTargetPath == "" {
@@ -540,7 +657,16 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 		}
 	}
 
-	ns.logoutTarget(volumeID)
+	k8sVolume := ns.dsmService.GetVolume(volumeId)
+	if k8sVolume == nil {
+		return &csi.NodeUnstageVolumeResponse{}, nil
+	}
+
+	if k8sVolume.Protocol == utils.ProtocolIscsi {
+		ns.logoutTarget(k8sVolume)
+	} else if k8sVolume.Protocol == utils.ProtocolNvme {
+		ns.logoutNVMeSubsystem(k8sVolume.Subsystem.Nqn)
+	}
 
 	return &csi.NodeUnstageVolumeResponse{}, nil
 }
@@ -637,6 +763,25 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	switch req.VolumeContext["protocol"] {
 	case utils.ProtocolSmb:
 		if err := ns.Mounter.Interface.Mount(stagingTargetPath, targetPath, "", options); err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+	case utils.ProtocolNvme:
+		nvmeDevPaths, err := ns.loginNVMeSubsystem(volumeId)
+		if err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+
+		volumeMountPath := nvmeDevPaths[0]
+		if volumeMountPath == "" {
+			return nil, status.Error(codes.Internal, "Can't get volume mount path")
+		}
+
+		if isBlock {
+			err = ns.Mounter.Interface.Mount(volumeMountPath, targetPath, "", options)
+		} else {
+			err = ns.Mounter.Interface.Mount(stagingTargetPath, targetPath, fsType, options)
+		}
+		if err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	default:
@@ -799,15 +944,32 @@ func (ns *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 			CapacityBytes: sizeInByte}, nil
 	}
 
-	if err := ns.Initiator.rescan(k8sVolume.Target.Iqn); err != nil {
-		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to rescan. err: %v", err))
-	}
+	var volumeMountPath string
+	if k8sVolume.Protocol == utils.ProtocolIscsi {
+		if err := ns.Initiator.rescan(k8sVolume.Target.Iqn); err != nil {
+			return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to rescan. err: %v", err))
+		}
 
-	// Assume target and lun 1-1 mapping
-	mappingIndex := k8sVolume.Target.MappedLuns[0].MappingIndex
-	volumeMountPath := ns.tools.getExistedVolumeMountPath(k8sVolume.Target.Iqn, mappingIndex)
-	if volumeMountPath == "" {
-		return nil, status.Error(codes.Internal, "Can't get volume mount path")
+		// Assume target and lun 1-1 mapping
+		mappingIndex := k8sVolume.Target.MappedLuns[0].MappingIndex
+		volumeMountPath = ns.tools.getExistedVolumeMountPath(k8sVolume.Target.Iqn, mappingIndex)
+		if volumeMountPath == "" {
+			return nil, status.Error(codes.Internal, "Can't get volume mount path")
+		}
+
+	} else if k8sVolume.Protocol == utils.ProtocolNvme {
+		subsysNqn := k8sVolume.Subsystem.Nqn
+		if subsysNqn == "" {
+			return nil, status.Errorf(codes.InvalidArgument, "NVMe subsystem NQN is empty for volume %s", volumeId)
+		}
+
+		path := getExistedNvmeDevPath(subsysNqn, volumeId)
+		if path == "" {
+			return nil, status.Errorf(codes.Internal, "Can't find nvme device path for volume %s", volumeId)
+		}
+		// rescan is not required for NVMe volume expansion.
+
+		volumeMountPath = path
 	}
 
 	if strings.Contains(volumeMountPath, "/dev/mapper") && ns.tools.IsMultipathEnabled() {

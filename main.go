@@ -33,6 +33,7 @@ var (
 	iscsiadmPath   = ""
 	multipathPath  = ""
 	multipathdPath = ""
+	nvmePath       = ""
 )
 
 var rootCmd = &cobra.Command{
@@ -84,6 +85,7 @@ func driverStart() error {
 		"iscsiadm":   iscsiadmPath,
 		"multipath":  multipathPath,
 		"multipathd": multipathdPath,
+		"nvme":       nvmePath,
 	}
 	cmdExecutor, err := hostexec.New(cmdMap, chrootDir)
 	if err != nil {
@@ -130,6 +132,7 @@ func addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(&iscsiadmPath, "iscsiadm-path", iscsiadmPath, "Full path of iscsiadm executable")
 	cmd.PersistentFlags().StringVar(&multipathPath, "multipath-path", multipathPath, "Full path of multipath executable")
 	cmd.PersistentFlags().StringVar(&multipathdPath, "multipathd-path", multipathdPath, "Full path of multipathd executable")
+	cmd.PersistentFlags().StringVar(&nvmePath, "nvme-path", nvmePath, "Full path of nvme executable")
 
 	cmd.MarkFlagRequired("endpoint")
 	cmd.MarkFlagRequired("client-info")

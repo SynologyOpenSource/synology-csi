@@ -52,16 +52,6 @@ type TargetInfo struct {
 	TargetId          int                `json:"target_id"`
 }
 
-type SnapshotInfo struct {
-	Name              string             `json:"name"`
-	Uuid              string             `json:"uuid"`
-	ParentUuid        string             `json:"parent_uuid"`
-	Status            string             `json:"status"`
-	TotalSize         int64              `json:"total_size"`
-	CreateTime        int64              `json:"create_time"`
-	RootPath          string             `json:"root_path"`
-}
-
 type LunDevAttrib struct {
 	DevAttrib string `json:"dev_attrib"`
 	Enable    int    `json:"enable"`
@@ -90,20 +80,6 @@ type LunCloneSpec struct {
 type TargetCreateSpec struct {
 	Name string
 	Iqn  string
-}
-
-type SnapshotCreateSpec struct {
-	Name        string
-	LunUuid     string
-	Description string
-	TakenBy     string
-	IsLocked    bool
-}
-
-type SnapshotCloneSpec struct {
-	Name            string
-	SrcLunUuid      string
-	SrcSnapshotUuid string
 }
 
 func errCodeMapping(errCode int, oriErr error) error {
@@ -375,12 +351,12 @@ func (dsm *DSM) LunDelete(lunUuid string) error {
 	return nil
 }
 
-func (dsm *DSM) TargetDelete(targetName string) error {
+func (dsm *DSM) TargetDelete(targetId string) error {
 	params := url.Values{}
 	params.Add("api", "SYNO.Core.ISCSI.Target")
 	params.Add("method", "delete")
 	params.Add("version", "1")
-	params.Add("target_id", strconv.Quote(targetName))
+	params.Add("target_id", strconv.Quote(targetId))
 
 	resp, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
 	if err != nil {
@@ -394,7 +370,7 @@ func (dsm *DSM) SnapshotCreate(spec SnapshotCreateSpec) (string, error) {
 	params.Add("api", "SYNO.Core.ISCSI.LUN")
 	params.Add("method", "take_snapshot")
 	params.Add("version", "1")
-	params.Add("src_lun_uuid", strconv.Quote(spec.LunUuid))
+	params.Add("src_lun_uuid", strconv.Quote(spec.SrcUuid))
 	params.Add("snapshot_name", strconv.Quote(spec.Name))
 	params.Add("description", strconv.Quote(spec.Description))
 	params.Add("taken_by", strconv.Quote(spec.TakenBy))
@@ -481,7 +457,7 @@ func (dsm *DSM) SnapshotClone(spec SnapshotCloneSpec) (string, error) {
 	params.Add("api", "SYNO.Core.ISCSI.LUN")
 	params.Add("method", "clone_snapshot")
 	params.Add("version", "1")
-	params.Add("src_lun_uuid", strconv.Quote(spec.SrcLunUuid))
+	params.Add("src_lun_uuid", strconv.Quote(spec.SrcUuid))
 	params.Add("snapshot_uuid", strconv.Quote(spec.SrcSnapshotUuid))
 	params.Add("cloned_lun_name", strconv.Quote(spec.Name))
 

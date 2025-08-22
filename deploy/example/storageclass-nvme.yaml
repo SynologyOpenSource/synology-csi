@@ -1,0 +1,12 @@
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: synology-nvme-storage
+provisioner: csi.san.synology.com
+parameters:
+  protocol: "nvme" # required for nvme protocol
+  # dsm: "1.1.1.1"
+  # location: '/volume1'
+reclaimPolicy: Delete
+allowVolumeExpansion: true

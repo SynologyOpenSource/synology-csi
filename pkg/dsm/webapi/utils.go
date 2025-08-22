@@ -4,7 +4,6 @@ package webapi
 
 import (
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"net"
 	"strings"
 	"time"
@@ -13,12 +12,7 @@ import (
 )
 
 func (dsm *DSM) IsUC() bool {
-	dsmSysInfo, err := dsm.DsmSystemInfoGet()
-    if err != nil {
-        log.Errorf("Failed to get DSM[%s] system info", dsm.Ip)
-        return false
-    }
-	return strings.Contains(dsmSysInfo.FirmwareVer, "DSM UC")
+	return strings.Contains(dsm.FirmwareVer, "DSM UC")
 }
 
 func (dsm *DSM) GetAnotherController() (*DSM, error) {

@@ -134,7 +134,8 @@ func (service *DsmService) createSMBorNFSVolumeByDsm(dsm *webapi.DSM, spec *mode
 	if spec.Location == "" {
 		vol, err := service.getFirstAvailableVolume(dsm, spec.Size, spec.Protocol)
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to get available location, err: %v", err))
+			return nil, status.Errorf(codes.Internal,
+				fmt.Sprintf("Failed to get available location, err: %v", err))
 		}
 		spec.Location = vol.Path
 	}
@@ -142,7 +143,8 @@ func (service *DsmService) createSMBorNFSVolumeByDsm(dsm *webapi.DSM, spec *mode
 	// 2. Check if location exists
 	dsmVolInfo, err := dsm.VolumeGet(spec.Location)
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, fmt.Sprintf("Unable to find location %s", spec.Location))
+		return nil,
+			status.Errorf(codes.InvalidArgument, fmt.Sprintf("Unable to find location %s", spec.Location))
 	}
 
 	if dsmVolInfo.FsType == models.FsTypeExt4 {

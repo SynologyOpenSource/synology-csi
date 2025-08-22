@@ -178,13 +178,13 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Error(codes.InvalidArgument, "Invalid provisioning type: space reclamation only supported for thin LUNs")
 	}
 
-	lunDescription := ""
+	description := ""
 	if _, ok := params["csi.storage.k8s.io/pvc/name"]; ok {
 		// if the /pvc/name is present, the namespace is present too
 		// as these parameters are reserved by external-provisioner
 		pvcNamespace := params["csi.storage.k8s.io/pvc/namespace"]
 		pvcName := params["csi.storage.k8s.io/pvc/name"]
-		lunDescription = pvcNamespace + "/" + pvcName
+		description = pvcNamespace + "/" + pvcName
 	}
 
 	nfsVer := parseNfsVesrion(mountOptions)
@@ -195,8 +195,8 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	spec := &models.CreateK8sVolumeSpec{
 		DsmIp:            params["dsm"],
 		K8sVolumeName:    volName,
-		LunName:          models.GenLunName(volName),
-		LunDescription:   lunDescription,
+		BackendName:      models.GenBackendName(volName),
+		Description:      description,
 		ShareName:        models.GenShareName(volName),
 		Location:         params["location"],
 		Size:             sizeInByte,
@@ -209,6 +209,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		Protocol:         protocol,
 		NfsVersion:       nfsVer,
 		DevAttribs:       devAttribs,
+		Reclaim:          utils.StringToBoolean(params["enableSpaceReclamation"]),
 	}
 
 	// idempotency
@@ -225,6 +226,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	if (k8sVolume.Protocol == utils.ProtocolIscsi && k8sVolume.SizeInBytes != sizeInByte) ||
+		(k8sVolume.Protocol == utils.ProtocolNvme && k8sVolume.SizeInBytes != sizeInByte) ||
 		(k8sVolume.Protocol == utils.ProtocolSmb && utils.BytesToMB(k8sVolume.SizeInBytes) != utils.BytesToMBCeil(sizeInByte)) ||
 		(k8sVolume.Protocol == utils.ProtocolNfs && utils.BytesToMB(k8sVolume.SizeInBytes) != utils.BytesToMBCeil(sizeInByte)) {
 		return nil, status.Errorf(codes.AlreadyExists, "Already existing volume name with different capacity")
@@ -328,11 +330,13 @@ func (cs *controllerServer) ListVolumes(ctx context.Context, req *csi.ListVolume
 				VolumeId:      info.VolumeId,
 				CapacityBytes: info.SizeInBytes,
 				VolumeContext: map[string]string{
-					"dsm":       info.DsmIp,
-					"lunName":   info.Lun.Name,
-					"targetIqn": info.Target.Iqn,
-					"shareName": info.Share.Name,
-					"protocol":  info.Protocol,
+					"dsm":           info.DsmIp,
+					"lunName":       info.Lun.Name,
+					"targetIqn":     info.Target.Iqn,
+					"shareName":     info.Share.Name,
+					"namespaceName": info.Namespace.Name,
+					"subsystemNqn":  info.Subsystem.Nqn,
+					"protocol":      info.Protocol,
 				},
 			},
 		})
@@ -545,9 +549,14 @@ func (cs *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 		return nil, err
 	}
 
+	nodeExpansion := false
+	if (k8sVolume.Protocol == utils.ProtocolIscsi || k8sVolume.Protocol == utils.ProtocolNvme) {
+		nodeExpansion = true
+	}
+
 	return &csi.ControllerExpandVolumeResponse{
 		CapacityBytes:         k8sVolume.SizeInBytes,
-		NodeExpansionRequired: (k8sVolume.Protocol == utils.ProtocolIscsi),
+		NodeExpansionRequired: nodeExpansion,
 	}, nil
 }
 

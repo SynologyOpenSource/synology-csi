@@ -17,6 +17,7 @@ const (
 	ProtocolSmb     = "smb"
 	ProtocolIscsi   = "iscsi"
 	ProtocolNfs     = "nfs"
+	ProtocolNvme    = "nvme"
 	ProtocolDefault = ProtocolIscsi
 
 	AuthTypeReadWrite AuthType = "rw"

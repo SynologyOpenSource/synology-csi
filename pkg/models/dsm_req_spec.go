@@ -11,8 +11,8 @@ import (
 type CreateK8sVolumeSpec struct {
 	DsmIp            string
 	K8sVolumeName    string
-	LunName          string
-	LunDescription	 string
+	BackendName      string
+	Description      string
 	ShareName        string
 	Location         string
 	Size             int64
@@ -25,6 +25,7 @@ type CreateK8sVolumeSpec struct {
 	Protocol         string
 	NfsVersion       string
 	DevAttribs       map[string]bool
+	Reclaim          bool
 }
 
 type K8sVolumeRespSpec struct {
@@ -37,6 +38,8 @@ type K8sVolumeRespSpec struct {
 	Lun               webapi.LunInfo
 	Target            webapi.TargetInfo
 	Share             webapi.ShareInfo
+	Namespace         webapi.NamespaceInfo
+	Subsystem         webapi.SubsystemInfo
 	Protocol          string
 	BaseDir           string
 }

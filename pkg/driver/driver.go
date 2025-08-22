@@ -30,7 +30,7 @@ const (
 
 var (
 	MultipathEnabled      = true
-	supportedProtocolList = []string{utils.ProtocolIscsi, utils.ProtocolSmb, utils.ProtocolNfs}
+	supportedProtocolList = []string{utils.ProtocolIscsi, utils.ProtocolSmb, utils.ProtocolNfs, utils.ProtocolNvme}
 	allowedNfsVersionList = []string{"3", "4", "4.0", "4.1"}
 )
 

@@ -8,14 +8,14 @@ import (
 	"strings"
 )
 
-type DsmInfo struct {
-	Hostname string `json:"hostname"`
-}
-
 type DsmSysInfo struct {
-	Model       string `json:"model"`
-	FirmwareVer string `json:"firmware_ver"`
-	Serial      string `json:"serial"`
+	Model         string `json:"model"`
+	FirmwareVer   string `json:"firmware_ver"`
+	Serial        string `json:"serial"`
+	// type: network
+	Hostname      string `json:"hostname"`
+	// type: define
+	SupportNvmeof string `json:"support_nvmeof"`
 }
 
 type NetworkInterface struct {
@@ -28,31 +28,36 @@ type NetworkInterface struct {
 	UseDhcp    bool   `json:"use_dhcp"`
 }
 
-func (dsm *DSM) DsmInfoGet() (*DsmInfo, error) {
-	params := url.Values{}
-	params.Add("api", "SYNO.Core.System")
-	params.Add("method", "info")
-	params.Add("version", "1")
-	params.Add("type", "network")
-
-	resp, err := dsm.sendRequest("", &DsmInfo{}, params, "webapi/entry.cgi")
+func (dsm *DSM) FillSystemInfo() error {
+	info, err := dsm.DsmSystemInfoGet("define")
 	if err != nil {
-		return nil, err
+		return err
 	}
+	dsm.SupportNvmeof = (info.SupportNvmeof == "yes")
 
-	dsmInfo, ok := resp.Data.(*DsmInfo)
-	if !ok {
-		return nil, fmt.Errorf("Failed to assert response to %T", &DsmInfo{})
+	info, err = dsm.DsmSystemInfoGet("network")
+	if err != nil {
+		return err
 	}
+	dsm.Hostname = info.Hostname
 
-	return dsmInfo, nil
+	info, err = dsm.DsmSystemInfoGet("")
+	if err != nil {
+		return err
+	}
+	dsm.FirmwareVer = info.FirmwareVer
+
+	return nil
 }
 
-func (dsm *DSM) DsmSystemInfoGet() (*DsmSysInfo, error) {
+func (dsm *DSM) DsmSystemInfoGet(infoType string) (*DsmSysInfo, error) {
 	params := url.Values{}
 	params.Add("api", "SYNO.Core.System")
 	params.Add("method", "info")
 	params.Add("version", "1")
+	if infoType != "" {
+		params.Add("type", infoType)
+	}
 
 	resp, err := dsm.sendRequest("", &DsmSysInfo{}, params, "webapi/entry.cgi")
 	if err != nil {
