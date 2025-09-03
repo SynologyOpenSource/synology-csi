@@ -100,7 +100,9 @@ spec:
             - --endpoint=$(CSI_ENDPOINT)
             - --log-level=info
             - --nodeid=$(KUBE_NODE_NAME)
+            {{- if .plugin.supportChrootDir }}
             - --chroot-dir=/host
+            {{- end }}
           env:
             - name: CSI_ENDPOINT
               value: unix://csi/csi.sock

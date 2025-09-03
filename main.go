@@ -109,6 +109,7 @@ func driverStart() error {
 }
 
 func main() {
+	rootCmd.FParseErrWhitelist.UnknownFlags = true
 	addFlags(rootCmd)
 
 	if err := rootCmd.Execute(); err != nil {
