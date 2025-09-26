@@ -101,6 +101,9 @@ spec:
             - --log-level=info
             - --nodeid=$(KUBE_NODE_NAME)
             - --chroot-dir=/host
+            {{- with $.Values.node.extraArgs }}
+            {{ toYaml . }}
+            {{- end }}
           env:
             - name: CSI_ENDPOINT
               value: unix://csi/csi.sock
