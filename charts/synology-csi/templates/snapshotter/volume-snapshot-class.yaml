@@ -1,0 +1,17 @@
+{{- if .Values.snapshotter.enabled }}
+{{- range .Values.volumeSnapshotClasses }}
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: {{ .name }}
+  annotations:
+  {{- if .isDefault }}
+    storageclass.kubernetes.io/is-default-class: "false"
+  {{- end }}
+driver: csi.san.synology.com
+deletionPolicy: {{ .deletionPolicy }}
+parameters:
+  {{- toYaml .parameters | nindent 2 }}
+---
+{{- end }}
+{{- end }}
