@@ -13,27 +13,40 @@ GOARM?=""
 BUILD_ENV=CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) GOARM=$(GOARM)
 BUILD_FLAGS="-s -w -extldflags \"-static\""
 
-.PHONY: all clean synology-csi-driver synocli test docker-build
+.PHONY: all
+all: build
 
-all: synology-csi-driver
+.PHONY: FORCE
+FORCE: ;
 
-synology-csi-driver:
-	@mkdir -p bin
-	$(BUILD_ENV) go build -v -ldflags $(BUILD_FLAGS) -o ./bin/synology-csi-driver ./
+.PHONY: build
+build: bin/synology-csi-driver bin/synocli
 
+bin:
+	@mkdir -p $@
+
+bin/synology-csi-driver: bin FORCE
+	@echo "Compiling $@…"
+	@$(BUILD_ENV) go build -v -ldflags $(BUILD_FLAGS) -o $@ ./
+
+.PHONY: docker-build
 docker-build:
 	docker build -f Dockerfile -t $(IMAGE_TAG) .
 
+.PHONY: docker-build-multiarch
 docker-build-multiarch:
 	docker buildx build -t $(IMAGE_TAG) --platform linux/amd64,linux/arm/v7,linux/arm64 . --push
 
-synocli:
-	@mkdir -p bin
-	$(BUILD_ENV) go build -v -ldflags $(BUILD_FLAGS) -o ./bin/synocli ./synocli
+bin/synocli: bin FORCE
+	@echo "Compiling $@…"
+	@$(BUILD_ENV) go build -v -ldflags $(BUILD_FLAGS) -o $@ ./synocli
 
+.PHONY: test
 test:
 	go clean -testcache
 	go test -v ./test/...
+
+.PHONY: clean
 clean:
 	-rm -rf ./bin
 
