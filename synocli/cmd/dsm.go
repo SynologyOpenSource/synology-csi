@@ -6,9 +6,10 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"github.com/spf13/cobra"
+
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/common"
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/webapi"
+	"github.com/spf13/cobra"
 )
 
 var https = false
@@ -79,11 +80,11 @@ var cmdDsmList = &cobra.Command{
 func LoginDsmForTest(id int) (*webapi.DSM, error) {
 	dsms, err := ListDsms(id)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to list dsms: %v", err)
+		return nil, fmt.Errorf("failed to list dsms: %v", err)
 	}
 
 	if err := dsms[0].Login(); err != nil {
-		return nil, fmt.Errorf("Failed to login to DSM: [%s]. err: %v", dsms[0].Ip, err)
+		return nil, fmt.Errorf("failed to login to DSM: [%s]. err: %v", dsms[0].Ip, err)
 	}
 
 	fmt.Printf("Login DSM: %s\n", dsms[0].Ip)
@@ -95,13 +96,13 @@ func ListDsms(id int) ([]*webapi.DSM, error) {
 
 	info, err := common.LoadConfig(ConfigFile)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to read config[%s]: %v", ConfigFile, err)
+		return nil, fmt.Errorf("failed to read config[%s]: %v", ConfigFile, err)
 	}
 	if id < -1 || id >= len(info.Clients) {
-		return nil, fmt.Errorf("Invalid dsmId: %d", id)
+		return nil, fmt.Errorf("invalid dsmId: %d", id)
 	}
 
-	for i, _ := range info.Clients {
+	for i := range info.Clients {
 		if id != -1 && id != i {
 			continue
 		}
@@ -117,7 +118,7 @@ func ListDsms(id int) ([]*webapi.DSM, error) {
 	}
 
 	if len(dsms) == 0 {
-		return nil, fmt.Errorf("No client in config")
+		return nil, fmt.Errorf("no client in config")
 	}
 	return dsms, nil
 }

@@ -4,8 +4,8 @@ package webapi
 
 import (
 	"fmt"
-	"strconv"
 	"net/url"
+	"strconv"
 )
 
 type VolInfo struct {
@@ -39,7 +39,7 @@ func (dsm *DSM) VolumeList() ([]VolInfo, error) {
 
 	volInfos, ok := resp.Data.(*VolInfos)
 	if !ok {
-		return nil, fmt.Errorf("Failed to assert response to %T", &VolInfos{})
+		return nil, fmt.Errorf("failed to assert response to %T", &VolInfos{})
 	}
 
 	return volInfos.Vols, nil
@@ -64,4 +64,3 @@ func (dsm *DSM) VolumeGet(name string) (VolInfo, error) {
 
 	return info.Volume, nil
 }
-

@@ -19,13 +19,13 @@ type DsmSysInfo struct {
 }
 
 type NetworkInterface struct {
-	Ifname     string `json:"ifname"`
-	Ip         string `json:"ip"`
-	Mask       string `json:"mask"`
-	Speed      int    `json:"speed"`
-	Status     string `json:"status"`
-	Type       string `json:"type"`
-	UseDhcp    bool   `json:"use_dhcp"`
+	Ifname  string `json:"ifname"`
+	Ip      string `json:"ip"`
+	Mask    string `json:"mask"`
+	Speed   int    `json:"speed"`
+	Status  string `json:"status"`
+	Type    string `json:"type"`
+	UseDhcp bool   `json:"use_dhcp"`
 }
 
 func (dsm *DSM) DsmInfoGet() (*DsmInfo, error) {
@@ -42,7 +42,7 @@ func (dsm *DSM) DsmInfoGet() (*DsmInfo, error) {
 
 	dsmInfo, ok := resp.Data.(*DsmInfo)
 	if !ok {
-		return nil, fmt.Errorf("Failed to assert response to %T", &DsmInfo{})
+		return nil, fmt.Errorf("failed to assert response to %T", &DsmInfo{})
 	}
 
 	return dsmInfo, nil
@@ -61,12 +61,11 @@ func (dsm *DSM) DsmSystemInfoGet() (*DsmSysInfo, error) {
 
 	dsmInfo, ok := resp.Data.(*DsmSysInfo)
 	if !ok {
-		return nil, fmt.Errorf("Failed to assert response to %T", &DsmSysInfo{})
+		return nil, fmt.Errorf("failed to assert response to %T", &DsmSysInfo{})
 	}
 
 	return dsmInfo, nil
 }
-
 
 func (dsm *DSM) NetworkInterfaceList(relayNode string) ([]NetworkInterface, error) {
 	params := url.Values{}

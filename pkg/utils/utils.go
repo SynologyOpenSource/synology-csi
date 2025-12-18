@@ -76,5 +76,5 @@ func LookupIPv4(name string) ([]string, error) {
 		return retIps, nil
 	}
 
-	return nil, fmt.Errorf("Failed to LookupIPv4 by local resolver for: %s", name)
+	return nil, fmt.Errorf("failed to LookupIPv4 by local resolver for: %s", name)
 }

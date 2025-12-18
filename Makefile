@@ -5,6 +5,9 @@ IMAGE_NAME=synology-csi
 IMAGE_VERSION=v1.2.1
 IMAGE_TAG=$(REGISTRY_NAME)/$(IMAGE_NAME):$(IMAGE_VERSION)
 
+GOPATH ?= $(shell go env GOPATH)
+GO_BIN := $(GOPATH)/bin
+
 # For now, only build linux/amd64 platform
 ifeq ($(GOARCH),)
 GOARCH:=amd64
@@ -41,6 +44,14 @@ bin/synocli: bin FORCE
 	@echo "Compiling $@…"
 	@$(BUILD_ENV) go build -v -ldflags $(BUILD_FLAGS) -o $@ ./synocli
 
+$(GO_BIN)/golangci-lint:
+	@echo "Installing golangci-lint to $(GO_BIN)…"
+	@go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest >/dev/null
+
+.PHONY: lint
+lint: $(GO_BIN)/golangci-lint ## Run golangci-lint.
+	@$(GO_BIN)/golangci-lint run
+	
 .PHONY: test
 test:
 	go clean -testcache

@@ -25,38 +25,38 @@ type ShareDefaultError struct {
 	ErrCode int
 }
 
-func (_ OutOfFreeSpaceError) Error() string {
+func (OutOfFreeSpaceError) Error() string {
 	return "Out of free space"
 }
-func (_ AlreadyExistError) Error() string {
+func (AlreadyExistError) Error() string {
 	return "Already Existed"
 }
-func (_ BadParametersError) Error() string {
+func (BadParametersError) Error() string {
 	return "Invalid input value"
 }
 
 // ISCSI errors
-func (_ NoSuchLunError) Error() string {
+func (NoSuchLunError) Error() string {
 	return "No such LUN"
 }
 
-func (_ LunReachMaxCountError) Error() string {
+func (LunReachMaxCountError) Error() string {
 	return "Number of LUN reach limit"
 }
 
-func (_ TargetReachMaxCountError) Error() string {
+func (TargetReachMaxCountError) Error() string {
 	return "Number of target reach limit"
 }
 
-func (_ NoSuchSnapshotError) Error() string {
+func (NoSuchSnapshotError) Error() string {
 	return "No such snapshot uuid"
 }
 
-func (_ BadLunTypeError) Error() string {
+func (BadLunTypeError) Error() string {
 	return "Bad LUN type"
 }
 
-func (_ SnapshotReachMaxCountError) Error() string {
+func (SnapshotReachMaxCountError) Error() string {
 	return "Number of snapshot reach limit"
 }
 
@@ -65,15 +65,15 @@ func (e IscsiDefaultError) Error() string {
 }
 
 // Share errors
-func (_ NoSuchShareError) Error() string {
+func (NoSuchShareError) Error() string {
 	return "No such share"
 }
 
-func (_ ShareReachMaxCountError) Error() string {
+func (ShareReachMaxCountError) Error() string {
 	return "Number of share reach limit"
 }
 
-func (_ ShareSystemBusyError) Error() string {
+func (ShareSystemBusyError) Error() string {
 	return "Share system is temporary busy"
 }
 

@@ -6,11 +6,12 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
-	"github.com/spf13/cobra"
+
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/webapi"
 	"github.com/SynologyOpenSource/synology-csi/pkg/utils"
-	"strconv"
+	"github.com/spf13/cobra"
 
 	"text/tabwriter"
 )
@@ -126,7 +127,7 @@ var cmdShareCreate = &cobra.Command{
 		if len(args) >= 3 {
 			size, err = strconv.ParseInt(args[2], 10, 64)
 			if err != nil {
-			    fmt.Println(err)
+				fmt.Println(err)
 				os.Exit(1)
 			}
 		}
@@ -199,10 +200,7 @@ var cmdShareClone = &cobra.Command{
 			dsm.Logout()
 		}()
 
-		fromSnapshot := false
-		if len(args) >= 3 && args[2] == "true" {
-			fromSnapshot = true
-		}
+		fromSnapshot := len(args) >= 3 && args[2] == "true"
 
 		newName := args[0]
 		srcName := args[1]
@@ -248,12 +246,12 @@ var cmdShareClone = &cobra.Command{
 		}
 
 		shareSpec := webapi.ShareCloneSpec{
-			Name: newName,
+			Name:     newName,
 			Snapshot: snapshot,
 			ShareInfo: webapi.ShareInfo{
 				Name:                newName,
 				VolPath:             srcShare.VolPath,
-				Desc:                "Cloned from "+srcName+" by synocli",
+				Desc:                "Cloned from " + srcName + " by synocli",
 				EnableRecycleBin:    srcShare.EnableRecycleBin,
 				RecycleBinAdminOnly: srcShare.RecycleBinAdminOnly,
 				NameOrg:             orgShareName,
@@ -437,7 +435,7 @@ func getShareLocalUserPermission(dsm *webapi.DSM, shareName string, userName str
 			return &info, nil
 		}
 	}
-	return nil, fmt.Errorf("Permission Not Found.")
+	return nil, fmt.Errorf("permission not found")
 }
 
 var cmdSharePermissionList = &cobra.Command{
@@ -510,9 +508,9 @@ var cmdSharePermissionSet = &cobra.Command{
 		permissions := append([]*webapi.SharePermission{}, permission)
 
 		spec := webapi.SharePermissionSetSpec{
-			Name: shareName,
+			Name:          shareName,
 			UserGroupType: userGroupType,
-			Permissions: permissions,
+			Permissions:   permissions,
 		}
 
 		fmt.Printf("spec = %#v\n", spec)
@@ -547,7 +545,7 @@ var cmdShareSet = &cobra.Command{
 		shareName := args[0]
 		newSize, err := strconv.ParseInt(args[1], 10, 64)
 		if err != nil {
-		    fmt.Println(err)
+			fmt.Println(err)
 			os.Exit(1)
 		}
 
@@ -579,7 +577,6 @@ var cmdShareSet = &cobra.Command{
 		fmt.Printf("Success, ShareSet(%s), quota: %v -> %v MB\n", shareName, share.QuotaValueInMB, newShare.QuotaValueInMB)
 	},
 }
-
 
 func init() {
 	cmdShare.AddCommand(cmdShareGet)

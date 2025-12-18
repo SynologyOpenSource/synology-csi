@@ -5,18 +5,18 @@ package logger
 import (
 	"os"
 	"runtime"
-	"strings"
 	"strconv"
+	"strings"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	nested "github.com/antonfisher/nested-logrus-formatter"
+	"github.com/sirupsen/logrus"
 )
 
 var WebapiDebug = false
 
 const (
-	DefaultLogLevel = logrus.InfoLevel
+	DefaultLogLevel        = logrus.InfoLevel
 	DefaultTimestampFormat = time.RFC3339
 )
 
@@ -38,14 +38,14 @@ func (hook *CallerHook) Levels() []logrus.Level {
 func NewCallerHook() logrus.Hook {
 	hook := CallerHook{
 		FileNameAndLine: "filePath",
-		Skip: 5,
+		Skip:            5,
 	}
 	return &hook
 }
 
 func getCaller(skip int) (string, int) {
 	_, file, line, ok := runtime.Caller(skip)
-	if !ok{
+	if !ok {
 		return "", 0
 	}
 
@@ -62,27 +62,26 @@ func getCaller(skip int) (string, int) {
 	return file, line
 }
 
-func findCaller(skip int) (string, int)  {
+func findCaller(skip int) (string, int) {
 	var file string
 	var line int
 	for i := 0; i < 10; i++ {
-		file, line = getCaller(skip+i)
+		file, line = getCaller(skip + i)
 		// if called by logrus functions, continue finding the upper caller
-		if !strings.HasPrefix(file, "logrus"){
+		if !strings.HasPrefix(file, "logrus") {
 			break
 		}
 	}
 	return file, line
 }
 
-func setLogLevel(logLevel string) {	// debug, info, warn, error, fatal
+func setLogLevel(logLevel string) { // debug, info, warn, error, fatal
 	level, err := logrus.ParseLevel(logLevel)
 	if err == nil {
 		logrus.SetLevel(level)
 	} else {
 		logrus.SetLevel(DefaultLogLevel)
 	}
-	return
 }
 
 func Init(logLevel string) {
@@ -90,9 +89,9 @@ func Init(logLevel string) {
 	logrus.SetOutput(os.Stdout)
 	setLogLevel(logLevel)
 	logrus.SetFormatter(&nested.Formatter{
-		HideKeys: true,
+		HideKeys:        true,
 		TimestampFormat: DefaultTimestampFormat,
-		ShowFullLevel: true,
-		NoColors: true,
+		ShowFullLevel:   true,
+		NoColors:        true,
 	})
 }

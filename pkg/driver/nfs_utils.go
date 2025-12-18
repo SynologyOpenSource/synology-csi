@@ -17,8 +17,8 @@ limitations under the License.
 package driver
 
 import (
-	"os"
 	log "github.com/sirupsen/logrus"
+	"os"
 )
 
 // chmodIfPermissionMismatch only perform chmod when permission mismatches

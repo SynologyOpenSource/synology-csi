@@ -5,17 +5,18 @@
 package common
 
 import (
-	"io/ioutil"
-	"gopkg.in/yaml.v2"
+	"os"
+
 	log "github.com/sirupsen/logrus"
+	"gopkg.in/yaml.v2"
 )
 
 type ClientInfo struct {
-	Host            string `yaml:"host"`
-	Port            int    `yaml:"port"`
-	Https           bool   `yaml:"https"`
-	Username        string `yaml:"username"`
-	Password        string `yaml:"password"`
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	Https    bool   `yaml:"https"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 type SynoInfo struct {
@@ -23,7 +24,7 @@ type SynoInfo struct {
 }
 
 func LoadConfig(configPath string) (*SynoInfo, error) {
-	file, err := ioutil.ReadFile(configPath)
+	file, err := os.ReadFile(configPath)
 	if err != nil {
 		log.Errorf("Unable to open config file: %v", err)
 		return nil, err
@@ -32,7 +33,7 @@ func LoadConfig(configPath string) (*SynoInfo, error) {
 	info := SynoInfo{}
 	err = yaml.Unmarshal(file, &info)
 	if err != nil {
-		log.Errorf("Failed to parse config: %v", err)
+		log.Errorf("failed to parse config: %v", err)
 		return nil, err
 	}
 

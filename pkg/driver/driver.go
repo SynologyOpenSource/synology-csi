@@ -108,7 +108,6 @@ func (d *Driver) addControllerServiceCapabilities(cl []csi.ControllerServiceCapa
 	}
 
 	d.csCap = csc
-	return
 }
 
 func (d *Driver) addVolumeCapabilityAccessModes(vc []csi.VolumeCapability_AccessMode_Mode) {
@@ -120,7 +119,6 @@ func (d *Driver) addVolumeCapabilityAccessModes(vc []csi.VolumeCapability_Access
 	}
 
 	d.vCap = vca
-	return
 }
 
 func (d *Driver) addNodeServiceCapabilities(nsc []csi.NodeServiceCapability_RPC_Type) {
@@ -132,7 +130,6 @@ func (d *Driver) addNodeServiceCapabilities(nsc []csi.NodeServiceCapability_RPC_
 	}
 
 	d.nsCap = nca
-	return
 }
 
 func (d *Driver) getVolumeCapabilityAccessModes() []*csi.VolumeCapability_AccessMode { // for debugging
