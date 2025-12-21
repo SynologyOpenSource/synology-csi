@@ -102,6 +102,7 @@ spec:
             - --nodeid=$(KUBE_NODE_NAME)
             {{- if .plugin.supportChrootDir }}
             - --chroot-dir=/host
+            {{- end }}
             {{- with $.Values.node.extraArgs }}
             {{ toYaml . }}
             {{- end }}
