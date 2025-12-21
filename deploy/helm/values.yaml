@@ -36,6 +36,7 @@ images:
     pullPolicy: IfNotPresent
     # Defaults to {{ $.Chart.AppVersion }} if empty or not present:
     tag: ""
+    supportChrootDir: true
   provisioner:
     image: registry.k8s.io/sig-storage/csi-provisioner
     pullPolicy: IfNotPresent
