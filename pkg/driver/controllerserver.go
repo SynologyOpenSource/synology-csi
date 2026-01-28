@@ -101,9 +101,9 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	volName, volCap := req.GetName(), req.GetVolumeCapabilities()
 	volContentSrc := req.GetVolumeContentSource()
 
-	var srcSnapshotId string = ""
-	var srcVolumeId string = ""
-	var multiSession bool = false
+	srcSnapshotId := ""
+	srcVolumeId := ""
+	multiSession := false
 
 	if err != nil {
 		return nil, err
@@ -124,9 +124,10 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			return nil, status.Errorf(codes.InvalidArgument, "Invalid volume capability access mode")
 		}
 
-		if accessMode == csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER {
+		switch accessMode {
+		case csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER:
 			multiSession = false
-		} else if accessMode == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
+		case csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER:
 			multiSession = true
 		}
 
@@ -166,7 +167,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	// check mountPermissions valid
 	if mountPermissions != "" {
 		if _, err := strconv.ParseUint(mountPermissions, 8, 32); err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, fmt.Sprintf("invalid mountPermissions %s in storage class", mountPermissions))
+			return nil, status.Errorf(codes.InvalidArgument, "invalid mountPermissions %s in storage class", mountPermissions)
 		}
 	}
 
@@ -254,8 +255,7 @@ func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 	}
 
 	if err := cs.dsmService.DeleteVolume(volumeId); err != nil {
-		return nil, status.Errorf(codes.Internal,
-			fmt.Sprintf("Failed to DeleteVolume(%s), err: %v", volumeId, err))
+		return nil, status.Errorf(codes.Internal, "Failed to DeleteVolume(%s), err: %v", volumeId, err)
 	}
 
 	return &csi.DeleteVolumeResponse{}, nil
@@ -297,13 +297,13 @@ func (cs *controllerServer) ListVolumes(ctx context.Context, req *csi.ListVolume
 	startingToken := req.GetStartingToken()
 
 	var entries []*csi.ListVolumesResponse_Entry
-	var nextToken string = ""
+	nextToken := ""
 
 	if 0 > maxEntries {
 		return nil, status.Error(codes.InvalidArgument, "Max entries can not be negative.")
 	}
 
-	pagingSkip := ("" != startingToken)
+	pagingSkip := (startingToken != "")
 	infos := cs.dsmService.ListVolumes()
 
 	sort.Sort(models.ByVolumeId(infos))
@@ -341,7 +341,7 @@ func (cs *controllerServer) ListVolumes(ctx context.Context, req *csi.ListVolume
 	}
 
 	if pagingSkip {
-		return nil, status.Errorf(codes.Aborted, fmt.Sprintf("Invalid StartingToken(%s)", startingToken))
+		return nil, status.Errorf(codes.Aborted, "invalid StartingToken(%s)", startingToken)
 	}
 
 	return &csi.ListVolumesResponse{
@@ -404,10 +404,10 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 	if orgSnap != nil {
 		// already existed
 		if orgSnap.ParentUuid != srcVolId {
-			return nil, status.Errorf(codes.AlreadyExists, fmt.Sprintf("Snapshot [%s] already exists but volume id is incompatible", snapshotName))
+			return nil, status.Errorf(codes.AlreadyExists, "snapshot [%s] already exists but volume id is incompatible", snapshotName)
 		}
 		if orgSnap.CreateTime < 0 {
-			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Bad create time: %v", orgSnap.CreateTime))
+			return nil, status.Errorf(codes.Internal, "bad create time: %v", orgSnap.CreateTime)
 		}
 		return &csi.CreateSnapshotResponse{
 			Snapshot: &csi.Snapshot{
@@ -431,7 +431,7 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 
 	snapshot, err := cs.dsmService.CreateSnapshot(spec)
 	if err != nil {
-		log.Errorf("Failed to CreateSnapshot, snapshotName: %s, srcVolId: %s, err: %v", snapshotName, srcVolId, err)
+		log.Errorf("failed to CreateSnapshot, snapshotName: %s, srcVolId: %s, err: %v", snapshotName, srcVolId, err)
 		return nil, err
 	}
 
@@ -455,7 +455,7 @@ func (cs *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteS
 
 	err := cs.dsmService.DeleteSnapshot(snapshotId)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to DeleteSnapshot(%s), err: %v", snapshotId, err))
+		return nil, status.Errorf(codes.Internal, "failed to DeleteSnapshot(%s), err: %v", snapshotId, err)
 	}
 
 	return &csi.DeleteSnapshotResponse{}, nil
@@ -468,13 +468,13 @@ func (cs *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnap
 	startingToken := req.GetStartingToken()
 
 	var entries []*csi.ListSnapshotsResponse_Entry
-	var nextToken string = ""
+	nextToken := ""
 
 	if 0 > maxEntries {
 		return nil, status.Error(codes.InvalidArgument, "Max entries can not be negative.")
 	}
 
-	pagingSkip := ("" != startingToken)
+	pagingSkip := (startingToken != "")
 	var snapshots []*models.K8sSnapshotRespSpec
 
 	if srcVolId != "" {
@@ -517,7 +517,7 @@ func (cs *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnap
 	}
 
 	if pagingSkip {
-		return nil, status.Errorf(codes.Aborted, fmt.Sprintf("Invalid StartingToken(%s)", startingToken))
+		return nil, status.Errorf(codes.Aborted, "invalid StartingToken(%s)", startingToken)
 	}
 
 	return &csi.ListSnapshotsResponse{

@@ -100,7 +100,7 @@ func (t *tools) iscsiadm_session() []iscsiSession {
 		if ok && exitErr.ExitStatus() == 21 { // iscsiadm: No active sessions
 			log.Info("No active iscsi session found.")
 		} else {
-			log.Errorf("Failed to run iscsiadm session: %v", err)
+			log.Errorf("failed to run iscsiadm session: %v", err)
 		}
 		return []iscsiSession{}
 	}
@@ -202,12 +202,12 @@ func (d *initiatorDriver) login(targetIqn string, portal string) error {
 	}
 
 	if err := d.tools.iscsiadm_discovery(portal); err != nil {
-		log.Errorf("Failed in discovery of the target: %v", err)
+		log.Errorf("failed in discovery of the target: %v", err)
 		return err
 	}
 
 	if err := d.tools.iscsiadm_login(targetIqn, portal); err != nil {
-		log.Errorf("Failed in login of the target: %v", err)
+		log.Errorf("failed in login of the target: %v", err)
 		return err
 	}
 
@@ -228,7 +228,7 @@ func (d *initiatorDriver) logout(targetIqn string, ip string) error {
 
 	portal := fmt.Sprintf("%s:%d", ip, ISCSIPort)
 	if err := d.tools.iscsiadm_logout(targetIqn); err != nil {
-		log.Errorf("Failed in logout of the target.\nTarget [%s], Portal [%s], Err[%v]",
+		log.Errorf("failed in logout of the target.\nTarget [%s], Portal [%s], Err[%v]",
 			targetIqn, portal, err)
 		return err
 	}
@@ -246,7 +246,7 @@ func (d *initiatorDriver) rescan(targetIqn string) error {
 	}
 
 	if err := d.tools.iscsiadm_rescan(targetIqn); err != nil {
-		log.Errorf("Failed in rescan of the target.\nTarget [%s], Err[%v]",
+		log.Errorf("failed in rescan of the target.\nTarget [%s], Err[%v]",
 			targetIqn, err)
 		return err
 	}

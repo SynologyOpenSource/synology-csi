@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"os"
 	"text/tabwriter"
-	"github.com/spf13/cobra"
+
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/webapi"
+	"github.com/spf13/cobra"
 )
 
 var cmdLun = &cobra.Command{
@@ -47,24 +48,24 @@ var cmdLunList = &cobra.Command{
 		}
 
 		tw := tabwriter.NewWriter(os.Stdout, 8, 0, 2, ' ', 0)
-		fmt.Fprintf(tw, "%-16s\t", "Host:")
-		fmt.Fprintf(tw, "%-52s\t", "Name:")
-		fmt.Fprintf(tw, "%-36s\t", "Uuid:")
-		fmt.Fprintf(tw, "%-10s\t", "Location:")
-		fmt.Fprintf(tw, "%-12s\t", "LunType:")
-		fmt.Fprintf(tw, "%-16s\t", "Size:")
-		fmt.Fprintf(tw, "%-16s\t", "Used:")
-		fmt.Fprintf(tw, "\n")
+		_, _ = fmt.Fprintf(tw, "%-16s\t", "Host:")
+		_, _ = fmt.Fprintf(tw, "%-52s\t", "Name:")
+		_, _ = fmt.Fprintf(tw, "%-36s\t", "Uuid:")
+		_, _ = fmt.Fprintf(tw, "%-10s\t", "Location:")
+		_, _ = fmt.Fprintf(tw, "%-12s\t", "LunType:")
+		_, _ = fmt.Fprintf(tw, "%-16s\t", "Size:")
+		_, _ = fmt.Fprintf(tw, "%-16s\t", "Used:")
+		_, _ = fmt.Fprintf(tw, "\n")
 		for ip, v := range lunInfos {
 			for _, info := range v {
-				fmt.Fprintf(tw, "%-16s\t", ip)
-				fmt.Fprintf(tw, "%-52s\t", info.Name)
-				fmt.Fprintf(tw, "%-36s\t", info.Uuid)
-				fmt.Fprintf(tw, "%-10s\t", info.Location)
-				fmt.Fprintf(tw, "%-12s\t", lunTypeToString(info.LunType))
-				fmt.Fprintf(tw, "%-16d\t", info.Size)
-				fmt.Fprintf(tw, "%-16d\t", info.Used)
-				fmt.Fprintf(tw, "\n")
+				_, _ = fmt.Fprintf(tw, "%-16s\t", ip)
+				_, _ = fmt.Fprintf(tw, "%-52s\t", info.Name)
+				_, _ = fmt.Fprintf(tw, "%-36s\t", info.Uuid)
+				_, _ = fmt.Fprintf(tw, "%-10s\t", info.Location)
+				_, _ = fmt.Fprintf(tw, "%-12s\t", lunTypeToString(info.LunType))
+				_, _ = fmt.Fprintf(tw, "%-16d\t", info.Size)
+				_, _ = fmt.Fprintf(tw, "%-16d\t", info.Used)
+				_, _ = fmt.Fprintf(tw, "\n")
 				_ = tw.Flush()
 			}
 		}
@@ -74,7 +75,7 @@ var cmdLunList = &cobra.Command{
 }
 
 func lunTypeToString(lunType int) string {
-	switch (lunType) {
+	switch lunType {
 	case 3:
 		return "FILE"
 	case 15:

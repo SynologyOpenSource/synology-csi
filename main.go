@@ -52,7 +52,7 @@ var rootCmd = &cobra.Command{
 
 		err := driverStart()
 		if err != nil {
-			log.Errorf("Failed to driverStart(): %v", err)
+			log.Errorf("failed to driverStart(): %v", err)
 			return err
 		}
 		return nil
@@ -67,14 +67,14 @@ func driverStart() error {
 	// 1. Login DSMs by given ClientInfo
 	info, err := common.LoadConfig(csiClientInfoPath)
 	if err != nil {
-		log.Errorf("Failed to read config: %v", err)
+		log.Errorf("failed to read config: %v", err)
 		return err
 	}
 
 	for _, client := range info.Clients {
 		err := dsmService.AddDsm(client)
 		if err != nil {
-			log.Errorf("Failed to add DSM: %s, error: %v", client.Host, err)
+			log.Errorf("failed to add DSM: %s, error: %v", client.Host, err)
 		}
 	}
 	defer dsmService.RemoveAllDsms()
@@ -87,7 +87,7 @@ func driverStart() error {
 	}
 	cmdExecutor, err := hostexec.New(cmdMap, chrootDir)
 	if err != nil {
-		log.Errorf("Failed to create command executor: %v", err)
+		log.Errorf("failed to create command executor: %v", err)
 		return err
 	}
 	tools := driver.NewTools(cmdExecutor)
@@ -95,7 +95,7 @@ func driverStart() error {
 	// 3. Create and Run the Driver
 	drv, err := driver.NewControllerAndNodeDriver(csiNodeID, csiEndpoint, dsmService, tools)
 	if err != nil {
-		log.Errorf("Failed to create driver: %v", err)
+		log.Errorf("failed to create driver: %v", err)
 		return err
 	}
 	drv.Activate()

@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	K8sCsiName       = "Kubernetes CSI"
+	K8sCsiName = "Kubernetes CSI"
 
 	// ISCSI definitions
 	FsTypeExt4       = "ext4"
@@ -15,17 +15,16 @@ const (
 	LunTypeFile      = "FILE"
 	LunTypeThin      = "THIN"
 	LunTypeAdv       = "ADV"
-	LunTypeBlun      = "BLUN"               // thin provision, mapped to type 263
-	LunTypeBlunThick = "BLUN_THICK"         // thick provision, mapped to type 259
-	MaxIqnLen = 128
+	LunTypeBlun      = "BLUN"       // thin provision, mapped to type 263
+	LunTypeBlunThick = "BLUN_THICK" // thick provision, mapped to type 259
+	MaxIqnLen        = 128
 
 	// Share definitions
-	MaxShareLen     = 32
-	MaxShareDescLen = 64
+	MaxShareLen             = 32
+	MaxShareDescLen         = 64
 	UserGroupTypeLocalUser  = "local_user"
 	UserGroupTypeLocalGroup = "local_group"
 	UserGroupTypeSystem     = "system"
-
 
 	// CSI definitions
 	TargetPrefix            = "k8s-csi"
