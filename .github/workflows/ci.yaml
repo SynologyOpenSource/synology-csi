@@ -1,0 +1,35 @@
+name: CI
+on:
+  push:
+    paths:
+      - '.github/workflows/ci.yaml'
+      - 'go.*'
+      - '**/*.go'
+      - 'Dockerfile'
+      - 'Makefile'
+  pull_request:
+    paths:
+      - '.github/workflows/ci.yaml'
+      - 'go.*'
+      - '**/*.go'
+      - 'Dockerfile'
+      - 'Makefile'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@v6.1.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Build binary
+        run: make build
