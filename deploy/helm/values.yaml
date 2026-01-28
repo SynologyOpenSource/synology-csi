@@ -59,6 +59,8 @@ node:
   # If your kubelet path is not standard, specify it here :
   ## example for miocrok8s distrib : /var/snap/microk8s/common/var/lib/kubelet
   kubeletPath: /var/lib/kubelet
+  extraArgs: []
+  # - --iscsiadm-path=/usr/local/sbin/iscsiadm
 # Specifies affinity, nodeSelector and tolerations for the snapshotter StatefulSet
 snapshotter:
   affinity: { }
