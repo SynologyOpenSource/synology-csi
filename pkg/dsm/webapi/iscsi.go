@@ -5,12 +5,12 @@ package webapi
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/SynologyOpenSource/synology-csi/pkg/logger"
+	"github.com/SynologyOpenSource/synology-csi/pkg/utils"
+	log "github.com/sirupsen/logrus"
 	"net/url"
 	"strconv"
 	"strings"
-	log "github.com/sirupsen/logrus"
-	"github.com/SynologyOpenSource/synology-csi/pkg/logger"
-	"github.com/SynologyOpenSource/synology-csi/pkg/utils"
 )
 
 type LunInfo struct {
@@ -53,13 +53,13 @@ type TargetInfo struct {
 }
 
 type SnapshotInfo struct {
-	Name              string             `json:"name"`
-	Uuid              string             `json:"uuid"`
-	ParentUuid        string             `json:"parent_uuid"`
-	Status            string             `json:"status"`
-	TotalSize         int64              `json:"total_size"`
-	CreateTime        int64              `json:"create_time"`
-	RootPath          string             `json:"root_path"`
+	Name       string `json:"name"`
+	Uuid       string `json:"uuid"`
+	ParentUuid string `json:"parent_uuid"`
+	Status     string `json:"status"`
+	TotalSize  int64  `json:"total_size"`
+	CreateTime int64  `json:"create_time"`
+	RootPath   string `json:"root_path"`
 }
 
 type LunDevAttrib struct {
@@ -82,9 +82,9 @@ type LunUpdateSpec struct {
 }
 
 type LunCloneSpec struct {
-	Name            string
-	SrcLunUuid      string
-	Location        string
+	Name       string
+	SrcLunUuid string
+	Location   string
 }
 
 type TargetCreateSpec struct {
@@ -129,7 +129,7 @@ func errCodeMapping(errCode int, oriErr error) error {
 	}
 
 	if errCode > 18990000 {
-		return utils.IscsiDefaultError{errCode}
+		return utils.IscsiDefaultError{ErrCode: errCode}
 	}
 	return oriErr
 }

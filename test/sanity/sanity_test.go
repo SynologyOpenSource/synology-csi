@@ -81,7 +81,8 @@ func TestSanity(t *testing.T) {
 
 	// Set Input parameters for test
 	testConfig.TestVolumeParameters = map[string]string{
-		"protocol": "smb",
+		"protocol":              "iscsi",
+		"allowMultipleSessions": "true",
 	}
 
 	// testConfig.TestVolumeAccessType = "block" // raw block

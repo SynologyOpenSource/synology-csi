@@ -73,7 +73,7 @@ func (t *tools) execWithTimeout(command string, args []string, timeout time.Dura
 	if err != nil {
 		if ee, ok := err.(utilexec.ExitError); ok {
 			log.Errorf("Non-zero exit code: %s", err)
-			err = fmt.Errorf("%s", ee.ExitStatus())
+			err = fmt.Errorf("%d", ee.ExitStatus())
 		}
 	}
 
