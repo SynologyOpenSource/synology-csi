@@ -101,6 +101,12 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	volName, volCap := req.GetName(), req.GetVolumeCapabilities()
 	volContentSrc := req.GetVolumeContentSource()
 
+	// Check if use_pvc_name is true, and if so, use the pvc name as the volume name
+	usePvcName, _ := strconv.ParseBool(req.GetParameters()[models.CSIUsePVCName])
+	if usePvcName {
+		volName = req.GetParameters()[models.CSIPVCName]
+	}
+
 	var srcSnapshotId string = ""
 	var srcVolumeId string = ""
 	var multiSession bool = false
@@ -195,9 +201,9 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	spec := &models.CreateK8sVolumeSpec{
 		DsmIp:            params["dsm"],
 		K8sVolumeName:    volName,
-		LunName:          models.GenLunName(volName),
+		LunName:          cs.dsmService.GenLunName(volName),
 		LunDescription:   lunDescription,
-		ShareName:        models.GenShareName(volName),
+		ShareName:        cs.dsmService.GenShareName(volName),
 		Location:         params["location"],
 		Size:             sizeInByte,
 		Type:             params["type"],
