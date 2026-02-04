@@ -129,7 +129,7 @@ func errCodeMapping(errCode int, oriErr error) error {
 	}
 
 	if errCode > 18990000 {
-		return utils.IscsiDefaultError{errCode}
+		return utils.IscsiDefaultError{ErrCode: errCode}
 	}
 	return oriErr
 }

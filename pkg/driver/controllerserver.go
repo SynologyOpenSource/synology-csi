@@ -192,6 +192,19 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Errorf(codes.InvalidArgument, "Unsupported nfsvers: %s", nfsVer)
 	}
 
+	// Parse allowMultipleSessions parameter for iSCSI targets
+	if params["allowMultipleSessions"] != "" {
+		allowMultipleSessions := utils.StringToBoolean(params["allowMultipleSessions"])
+		if protocol != utils.ProtocolIscsi {
+			log.Infof("Volume [%s]: allowMultipleSessions parameter ignored for protocol [%s]", volName, protocol)
+		} else if allowMultipleSessions && !multiSession {
+			log.Infof("Enabling multi-session for volume [%s] via allowMultipleSessions parameter", volName)
+			multiSession = true
+		} else if !allowMultipleSessions && multiSession {
+			log.Warnf("Volume [%s]: allowMultipleSessions=false but access mode requires multi-session; using multi-session", volName)
+		}
+	}
+
 	spec := &models.CreateK8sVolumeSpec{
 		DsmIp:            params["dsm"],
 		K8sVolumeName:    volName,
