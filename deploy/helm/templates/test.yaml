@@ -37,7 +37,7 @@ spec:
       containers:
         - name: touch
           command: [ "/bin/sh", "-c", "echo 'Hello world!' >/data/file" ]
-          image: busybox
+          image: docker.io/busybox
           volumeMounts:
             - mountPath: /data
               name: data
