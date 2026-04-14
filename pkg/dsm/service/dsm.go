@@ -189,6 +189,15 @@ func (service *DsmService) createMappingTarget(dsm *webapi.DSM, spec *models.Cre
 		targetId = strconv.Itoa(targetInfo.TargetId);
 	}
 
+	if len(spec.IscsiInterfaceNames) > 0 {
+		if err := dsm.TargetResetNetworkPortals(targetId); err != nil {
+			return webapi.TargetInfo{}, status.Errorf(codes.Internal, fmt.Sprintf("Failed to reset target [%s] network portals, err: %v", spec.TargetName, err))
+		}
+		if err := dsm.TargetAddNetworkPortals(targetId, spec.IscsiInterfaceNames); err != nil {
+			return webapi.TargetInfo{}, status.Errorf(codes.Internal, fmt.Sprintf("Failed to add target [%s] network portals %v, err: %v", spec.TargetName, spec.IscsiInterfaceNames, err))
+		}
+	}
+
 	if spec.MultipleSession == true {
 		if err := dsm.TargetSet(targetId, 0); err != nil {
 			return webapi.TargetInfo{}, status.Errorf(codes.Internal, fmt.Sprintf("Failed to set target [%s] max session, err: %v", spec.TargetName, err))
@@ -197,6 +206,11 @@ func (service *DsmService) createMappingTarget(dsm *webapi.DSM, spec *models.Cre
 
 	if err := dsm.LunMapTarget([]string{targetId}, lunUuid); err != nil {
 		return webapi.TargetInfo{}, status.Errorf(codes.Internal, fmt.Sprintf("Failed to map target [%s] to lun [%s], err: %v", spec.TargetName, lunUuid, err))
+	}
+
+	targetInfo, err = dsm.TargetGet(targetSpec.Name)
+	if err != nil {
+		return webapi.TargetInfo{}, status.Errorf(codes.Internal, fmt.Sprintf("Failed to refresh target with spec: %v, err: %v", targetSpec, err))
 	}
 
 	return targetInfo, nil

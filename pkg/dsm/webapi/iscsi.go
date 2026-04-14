@@ -92,6 +92,10 @@ type TargetCreateSpec struct {
 	Iqn  string
 }
 
+type TargetNetworkPortal struct {
+	InterfaceName string `json:"interface_name"`
+}
+
 type SnapshotCreateSpec struct {
 	Name        string
 	LunUuid     string
@@ -340,6 +344,54 @@ func (dsm *DSM) TargetCreate(spec TargetCreateSpec) (string, error) {
 	}
 
 	return strconv.Itoa(trgResp.TargetId), nil
+}
+
+func (dsm *DSM) TargetAddNetworkPortals(targetId string, interfaceNames []string) error {
+	if len(interfaceNames) == 0 {
+		return nil
+	}
+
+	networkPortals := make([]TargetNetworkPortal, 0, len(interfaceNames))
+	for _, interfaceName := range interfaceNames {
+		networkPortals = append(networkPortals, TargetNetworkPortal{InterfaceName: interfaceName})
+	}
+
+	compoundReq := []map[string]interface{}{
+		{
+			"api":             "SYNO.Core.ISCSI.Target",
+			"method":          "network_portals_add",
+			"version":         1,
+			"target_id":       targetId,
+			"network_portals": networkPortals,
+		},
+	}
+
+	compoundJSON, err := json.Marshal(compoundReq)
+	if err != nil {
+		return err
+	}
+
+	params := url.Values{}
+	params.Add("api", "SYNO.Entry.Request")
+	params.Add("method", "request")
+	params.Add("version", "1")
+	params.Add("stop_when_error", "true")
+	params.Add("mode", strconv.Quote("sequential"))
+	params.Add("compound", string(compoundJSON))
+
+	resp, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
+	if err != nil {
+		return errCodeMapping(resp.ErrorCode, err)
+	}
+
+	return nil
+}
+
+func (dsm *DSM) TargetResetNetworkPortals(targetId string) error {
+	// DSM treats "all" as the default placeholder portal set. Resetting to it
+	// lets us reconcile existing concrete portal bindings before applying the
+	// requested interfaces.
+	return dsm.TargetAddNetworkPortals(targetId, []string{"all"})
 }
 
 func (dsm *DSM) LunMapTarget(targetIds []string, lunUuid string) error {
