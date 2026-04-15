@@ -96,6 +96,27 @@ func parseDevAttribs(params map[string]string) (map[string]bool, error) {
 	return attribFlags, nil
 }
 
+func parseIscsiInterfaceNames(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+
+	names := []string{}
+	for _, name := range strings.Split(raw, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+	}
+
+	if len(names) == 0 {
+		return nil
+	}
+
+	return names
+}
+
 func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
 	sizeInByte, err := getSizeByCapacityRange(req.GetCapacityRange())
 	volName, volCap := req.GetName(), req.GetVolumeCapabilities()
@@ -209,6 +230,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		Protocol:         protocol,
 		NfsVersion:       nfsVer,
 		DevAttribs:       devAttribs,
+		IscsiInterfaceNames: parseIscsiInterfaceNames(params["iscsiInterfaceNames"]),
 	}
 
 	// idempotency

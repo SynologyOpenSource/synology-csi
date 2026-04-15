@@ -1,0 +1,13 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: synostorage
+provisioner: csi.san.synology.com
+parameters:
+  dsm: "192.168.1.1"
+  location: "/volume1"
+  fsType: "btrfs"
+  iscsiInterfaceNames: "bond0"
+  formatOptions: "--nodiscard"
+reclaimPolicy: Retain
+allowVolumeExpansion: true

@@ -119,6 +119,7 @@ Create and apply StorageClasses with the properties you want.
       fsType: 'btrfs'
       dsm: '192.168.1.1'
       location: '/volume1'
+      iscsiInterfaceNames: 'bond0'
       formatOptions: '--nodiscard'
     reclaimPolicy: Retain
     allowVolumeExpansion: true
@@ -184,6 +185,7 @@ Create and apply StorageClasses with the properties you want.
     | *location*                                       | string | The location (/volume1, /volume2, ...) on DSM where the LUN for *PersistentVolume* will be created                                                                 | -       | iSCSI, SMB, NFS     |
     | *fsType*                                         | string | The formatting file system of the *PersistentVolumes* when you mount them on the pods. This parameter only works with iSCSI. For SMB, the fsType is always ‘cifs‘. | 'ext4'  | iSCSI               |
     | *protocol*                                       | string | The storage backend protocol. Enter ‘iscsi’ to create LUNs, or ‘smb‘ or 'nfs' to create shared folders on DSM.                                                     | 'iscsi' | iSCSI, SMB, NFS     |
+    | *iscsiInterfaceNames*                            | string | A comma-separated list of DSM iSCSI interface names to bind to each created iSCSI target, for example `bond0` or `eth0,eth1`.                                     | -       | iSCSI               |
     | *formatOptions*                                  | string | Additional options/arguments passed to `mkfs.*` command. See a linux manual that corresponds with your FS of choice.                                               | -       | iSCSI               |
     | *enableSpaceReclamation*                         | string | Enables space reclamation for Thin Provisioned Btrfs LUNs to improve storage efficiency. May impact performance and space display.                                 | 'false' | iSCSI               |
     | *enableFuaSyncCache*                             | string | Enables FUA and Sync Cache SCSI commands for LUNs.                                                                                                                 | 'false' | iSCSI               |
@@ -195,6 +197,7 @@ Create and apply StorageClasses with the properties you want.
 
     - If you leave the parameter *location* blank, the CSI driver will choose a volume on DSM with available storage to create the volumes.
     - All iSCSI volumes created by the CSI driver are Thin Provisioned LUNs on DSM. This will allow you to take snapshots of them.
+    - The value of *iscsiInterfaceNames* must match the DSM interface names used by SAN Manager and the DSM API, such as `bond0` or `eth0`.
 
 3. Apply the YAML files to the Kubernetes cluster.
 
@@ -256,4 +259,3 @@ If you want to use images you built locally for installation, edit all files und
 ### Uninstallation
 If you are no longer using the CSI driver, make sure that no other resources in your Kubernetes cluster are using storage managed by Synology CSI driver before uninstalling it.
 - `./scripts/uninstall.sh`
-

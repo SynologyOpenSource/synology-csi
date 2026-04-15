@@ -17,7 +17,7 @@ COPY main.go .
 COPY pkg ./pkg
 RUN env GOARCH=$(echo "$TARGETPLATFORM" | cut -f2 -d/) \
         GOARM=$(echo "$TARGETPLATFORM" | cut -f3 -d/ | cut -c2-) \
-        make
+        make bin/synology-csi-driver
 
 ############## Final stage ##############
 FROM alpine:latest
