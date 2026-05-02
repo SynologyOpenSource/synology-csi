@@ -169,7 +169,7 @@ func (dsm *DSM) LunCreate(spec LunCreateSpec) (string, error) {
 	params.Add("size", strconv.FormatInt(int64(spec.Size), 10))
 	params.Add("type", spec.Type)
 	params.Add("location", spec.Location)
-	params.Add("description", spec.Description)
+	params.Add("description", strconv.Quote(spec.Description))
 
 	js, err := json.Marshal(spec.DevAttribs)
 	if err != nil {
