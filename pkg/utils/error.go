@@ -21,6 +21,7 @@ type IscsiDefaultError struct {
 type NoSuchShareError string
 type ShareReachMaxCountError string
 type ShareSystemBusyError string
+type BadDescriptionError string
 type ShareDefaultError struct {
 	ErrCode int
 }
@@ -33,6 +34,9 @@ func (_ AlreadyExistError) Error() string {
 }
 func (_ BadParametersError) Error() string {
 	return "Invalid input value"
+}
+func (_ BadDescriptionError) Error() string {
+	return "Bad description"
 }
 
 // ISCSI errors

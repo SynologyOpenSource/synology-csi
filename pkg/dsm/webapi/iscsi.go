@@ -110,6 +110,8 @@ func errCodeMapping(errCode int, oriErr error) error {
 	switch errCode {
 	case 18990002: // Out of free space
 		return utils.OutOfFreeSpaceError("")
+	case 18990403:
+		return utils.BadDescriptionError("")
 	case 18990531: // No such LUN
 		return utils.NoSuchLunError("")
 	case 18990538: // Duplicated LUN name
