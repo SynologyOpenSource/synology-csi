@@ -80,3 +80,10 @@ func (_ ShareSystemBusyError) Error() string {
 func (e ShareDefaultError) Error() string {
 	return fmt.Sprintf("Share API error. Error code: %d", e.ErrCode)
 }
+
+// NFS errors
+type NfsSystemBusyError string
+
+func (_ NfsSystemBusyError) Error() string {
+	return "NFS system is temporarily busy (error 2370)"
+}

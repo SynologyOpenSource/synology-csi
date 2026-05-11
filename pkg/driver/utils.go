@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
@@ -76,8 +77,9 @@ func NewNodeServer(d *Driver) *nodeServer {
 			chapPassword: "",
 			tools:        d.tools,
 		},
-		Client: getK8sClient(),
-		tools:  d.tools,
+		Client:     getK8sClient(),
+		tools:      d.tools,
+		nfsPrivMus: make(map[string]*sync.Mutex),
 	}
 }
 
