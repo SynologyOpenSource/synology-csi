@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/SynologyOpenSource/synology-csi/pkg/utils"
@@ -413,12 +414,38 @@ func (dsm *DSM) ShareNfsPrivilegeSave(privilege SharePrivilege) error {
 	}
 	params.Add("rule", string(js))
 
-	_, err = dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
-	if err != nil {
-		return err
+	// DSM error 2370 means the NFS subsystem is temporarily busy.
+	// Under concurrent PVC creation (e.g. Kasten K10 restore) the NFS
+	// subsystem serialises updates and can transiently reject calls.
+	// Retry with exponential back-off (capped at 10s) before giving up.
+	// NodeStageVolume has a multi-minute Kubernetes timeout so we have
+	// enough headroom to wait ~45s total across 8 attempts.
+	const maxRetries = 11
+	const maxDelay = 10 * time.Second
+	delay := 500 * time.Millisecond
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		resp, reqErr := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
+		if reqErr == nil {
+			return nil
+		}
+		if resp.ErrorCode == 2370 {
+			if attempt == maxRetries {
+				break
+			}
+			log.Warnf("NFS subsystem busy for share [%s] (attempt %d/%d), retrying in %v",
+				privilege.ShareName, attempt, maxRetries, delay)
+			time.Sleep(delay)
+			delay *= 2
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+			continue
+		}
+		return reqErr
 	}
-
-	return nil
+	return utils.NfsSystemBusyError(
+		fmt.Sprintf("share [%s]: NFS subsystem still busy after %d attempts", privilege.ShareName, maxRetries),
+	)
 }
 
 func (dsm *DSM) ShareNfsPrivilegeLoad(shareName string) (SharePrivilege, error) {
