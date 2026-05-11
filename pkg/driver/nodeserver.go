@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -48,6 +49,13 @@ type nodeServer struct {
 	Initiator  *initiatorDriver
 	Client     clientset.Interface
 	tools      tools
+
+	// nfsPrivMus serialises ShareNfsPrivilegeSave calls per DSM IP within
+	// this node pod.  Under concurrent PVC creation (e.g. Kasten K10 restore)
+	// multiple NodeStageVolume goroutines would otherwise hammer the same DSM
+	// NFS subsystem simultaneously, causing transient error 2370.
+	nfsPrivMusMu sync.Mutex
+	nfsPrivMus   map[string]*sync.Mutex
 }
 
 func waitForDevicePathToExist(path string) error {
@@ -304,6 +312,15 @@ func getNodeAddress(ctx context.Context, client clientset.Interface) ([]string, 
 	return ips, nil
 }
 
+func (ns *nodeServer) getNfsPrivMutex(dsmIp string) *sync.Mutex {
+	ns.nfsPrivMusMu.Lock()
+	defer ns.nfsPrivMusMu.Unlock()
+	if ns.nfsPrivMus[dsmIp] == nil {
+		ns.nfsPrivMus[dsmIp] = &sync.Mutex{}
+	}
+	return ns.nfsPrivMus[dsmIp]
+}
+
 func (ns *nodeServer) setNFSVolumePrivilege(sourcePath string, hostnames []string, authType utils.AuthType) error {
 	// NFSTODO: fix the parsing rule
 	s := strings.Split(strings.TrimPrefix(sourcePath, "//"), "/")
@@ -337,6 +354,14 @@ func (ns *nodeServer) setNFSVolumePrivilege(sourcePath string, hostnames []strin
 			},
 		})
 	}
+
+	// Serialise NFS privilege saves per DSM to avoid concurrent calls that
+	// trigger DSM error 2370 (NFS subsystem temporarily busy).
+	// ShareNfsPrivilegeSave already retries on 2370, but serialising here
+	// prevents the thundering herd in the first place.
+	mu := ns.getNfsPrivMutex(dsmIp)
+	mu.Lock()
+	defer mu.Unlock()
 
 	err = dsm.ShareNfsPrivilegeSave(priv)
 	if err != nil {
