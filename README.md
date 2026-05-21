@@ -190,6 +190,7 @@ Create and apply StorageClasses with the properties you want.
     | *csi.storage.k8s.io/node-stage-secret-name*      | string | The name of node-stage-secret. Required if DSM shared folder is accessed via SMB.                                                                                  | -       | SMB                 |
     | *csi.storage.k8s.io/node-stage-secret-namespace* | string | The namespace of node-stage-secret. Required if DSM shared folder is accessed via SMB.                                                                             | -       | SMB                 |
     | *mountPermissions*                               | string | Mounted folder permissions. If set as non-zero, driver will perform `chmod` after mount                                                                            | '0750'  | NFS                 |
+    | *nfsClientAllowlist*                             | string | Comma-separated list of clients (IPs, CIDRs, hostnames, or `*`) to use for the NFS share's allowed-clients rule. When set, replaces the default behavior of registering each Kubernetes node's `InternalIP`. Useful when DSM cannot see the real node IPs (e.g. NAT between K8s and NAS subnets, see [#113](https://github.com/SynologyOpenSource/synology-csi/issues/113)). | -       | NFS                 |
 
     **Notice**
 

@@ -553,12 +553,23 @@ func (ns *nodeServer) nodeStageSMBVolume(ctx context.Context, spec *models.NodeS
 }
 
 func (ns *nodeServer) nodeStageNFSVolume(ctx context.Context, spec *models.NodeStageVolumeSpec) (*csi.NodeStageVolumeResponse, error) {
-	nodeIps, err := getNodeAddress(ctx, ns.Client)
-	if err != nil {
-		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to get node IPs for NFS privilege setting, err: %v", err))
+	var clients []string
+	if spec.NfsClientAllowlist != "" {
+		for _, c := range strings.Split(spec.NfsClientAllowlist, ",") {
+			if c = strings.TrimSpace(c); c != "" {
+				clients = append(clients, c)
+			}
+		}
+	}
+	if len(clients) == 0 {
+		nodeIps, err := getNodeAddress(ctx, ns.Client)
+		if err != nil {
+			return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to get node IPs for NFS privilege setting, err: %v", err))
+		}
+		clients = nodeIps
 	}
 
-	if err := ns.setNFSVolumePrivilege(spec.Source, nodeIps, utils.AuthTypeReadWrite); err != nil {
+	if err := ns.setNFSVolumePrivilege(spec.Source, clients, utils.AuthTypeReadWrite); err != nil {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to set NFS privilege rule, source: %s, err: %v", spec.Source, err))
 	}
 	return &csi.NodeStageVolumeResponse{}, nil
@@ -616,12 +627,13 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	}
 
 	spec := &models.NodeStageVolumeSpec{
-		VolumeId:          volumeId,
-		StagingTargetPath: stagingTargetPath,
-		VolumeCapability:  volumeCapability,
-		Dsm:               req.VolumeContext["dsm"],
-		Source:            req.VolumeContext["source"], // filled by CreateVolume response
-		FormatOptions:     req.VolumeContext["formatOptions"],
+		VolumeId:           volumeId,
+		StagingTargetPath:  stagingTargetPath,
+		VolumeCapability:   volumeCapability,
+		Dsm:                req.VolumeContext["dsm"],
+		Source:             req.VolumeContext["source"], // filled by CreateVolume response
+		FormatOptions:      req.VolumeContext["formatOptions"],
+		NfsClientAllowlist: req.VolumeContext["nfsClientAllowlist"],
 	}
 
 	switch req.VolumeContext["protocol"] {

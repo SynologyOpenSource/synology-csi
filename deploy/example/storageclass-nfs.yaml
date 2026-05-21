@@ -9,6 +9,12 @@ parameters:
   mountPermissions: '0777'
   # dsm: "1.1.1.1"
   # location: '/volume1'
+  # nfsClientAllowlist: "*"                            # use this when the DSM cannot see the real
+  # nfsClientAllowlist: "10.0.0.0/8,192.168.0.0/16"    # K8s node IPs (NAT, different subnet, etc.).
+                                                      # Comma-separated list of IPs/CIDRs/hostnames
+                                                      # accepted by DSM's NFS rule "client" field.
+                                                      # If unset (default), the driver populates
+                                                      # the rule with the cluster's node InternalIPs.
 mountOptions:
   - nfsvers=4 #3,4,4.1
 reclaimPolicy: Delete
