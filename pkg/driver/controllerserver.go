@@ -192,6 +192,12 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Errorf(codes.InvalidArgument, "Unsupported nfsvers: %s", nfsVer)
 	}
 
+	// enableRecycleBin (SMB/NFS StorageClass param): default true to preserve legacy behaviour.
+	enableRecycleBin := true
+	if v, ok := params["enableRecycleBin"]; ok && v != "" {
+		enableRecycleBin = utils.StringToBoolean(v)
+	}
+
 	spec := &models.CreateK8sVolumeSpec{
 		DsmIp:            params["dsm"],
 		K8sVolumeName:    volName,
@@ -210,6 +216,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		NfsVersion:       nfsVer,
 		DevAttribs:       devAttribs,
 		Reclaim:          utils.StringToBoolean(params["enableSpaceReclamation"]),
+		EnableRecycleBin: enableRecycleBin,
 	}
 
 	// idempotency

@@ -26,6 +26,7 @@ type CreateK8sVolumeSpec struct {
 	NfsVersion       string
 	DevAttribs       map[string]bool
 	Reclaim          bool
+	EnableRecycleBin bool
 }
 
 type K8sVolumeRespSpec struct {
