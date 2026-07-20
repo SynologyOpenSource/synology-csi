@@ -16,6 +16,7 @@ import (
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/webapi"
 	"github.com/SynologyOpenSource/synology-csi/pkg/models"
 	"github.com/SynologyOpenSource/synology-csi/pkg/utils"
+	"github.com/cenkalti/backoff/v4"
 )
 
 func GMTToUnixSecond(timeStr string) (int64) {
@@ -205,9 +206,9 @@ func (service *DsmService) listSMBorNFSVolumes(dsmIp string) (infos []*models.K8
 				continue
 			}
 			// if share has set nfs rule, deal it as NFS
-			sharePrivilege, err := dsm.ShareNfsPrivilegeLoad(share.Name)
+			sharePrivilege, err := loadShareNfsPrivilegeWithRetry(dsm, share.Name)
 			if err != nil {
-				log.Errorf("[%s] Failed to load share nfs privilege: %v", dsm.Ip, err)
+				log.Errorf("[%s] Failed to load share nfs privilege after retries: %v", dsm.Ip, err)
 				continue
 			}
 			if len(sharePrivilege.Rule) > 0 {
@@ -219,6 +220,30 @@ func (service *DsmService) listSMBorNFSVolumes(dsmIp string) (infos []*models.K8
 	}
 
 	return infos
+}
+
+func loadShareNfsPrivilegeWithRetry(dsm *webapi.DSM, shareName string) (webapi.SharePrivilege, error) {
+	privilegeBackoff := backoff.NewExponentialBackOff()
+	privilegeBackoff.InitialInterval = 1 * time.Second
+	privilegeBackoff.Multiplier = 2
+	privilegeBackoff.RandomizationFactor = 0.1
+	privilegeBackoff.MaxElapsedTime = 10 * time.Second
+
+	notify := func(err error, duration time.Duration) {
+		log.Infof("[%s] Share NFS privilege system busy while loading [%s], retrying in %3.2f seconds.....", dsm.Ip, shareName, float64(duration.Seconds()))
+	}
+
+	var sharePrivilege webapi.SharePrivilege
+	err := backoff.RetryNotify(func() error {
+		var loadErr error
+		sharePrivilege, loadErr = dsm.ShareNfsPrivilegeLoad(shareName)
+		if loadErr != nil && !errors.Is(loadErr, utils.ShareSystemBusyError("")) {
+			return backoff.Permanent(loadErr)
+		}
+		return loadErr
+	}, privilegeBackoff, notify)
+
+	return sharePrivilege, err
 }
 
 func (service *DsmService) listSMBorNFSSnapshotsByDsm(dsm *webapi.DSM) (infos []*models.K8sSnapshotRespSpec) {

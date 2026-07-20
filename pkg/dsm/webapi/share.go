@@ -108,6 +108,14 @@ func shareErrCodeMapping(errCode int, oriErr error) error {
 	return oriErr
 }
 
+func nfsPrivilegeErrCodeMapping(errCode int, oriErr error) error {
+	switch errCode {
+	case 2370: // NFS privilege subsystem temporarily busy (e.g. under concurrent share creation)
+		return utils.ShareSystemBusyError("")
+	}
+	return oriErr
+}
+
 // ----------------------- Share APIs -----------------------
 func (dsm *DSM) ShareGet(shareName string) (ShareInfo, error) {
 	params := url.Values{}
@@ -413,12 +421,9 @@ func (dsm *DSM) ShareNfsPrivilegeSave(privilege SharePrivilege) error {
 	}
 	params.Add("rule", string(js))
 
-	_, err = dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
-	if err != nil {
-		return err
-	}
+	resp, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
 
-	return nil
+	return nfsPrivilegeErrCodeMapping(resp.ErrorCode, err)
 }
 
 func (dsm *DSM) ShareNfsPrivilegeLoad(shareName string) (SharePrivilege, error) {
@@ -429,9 +434,9 @@ func (dsm *DSM) ShareNfsPrivilegeLoad(shareName string) (SharePrivilege, error) 
 	params.Add("version", "1")
 
 	info := SharePrivilege{}
-	_, err := dsm.sendRequest("", &info, params, "webapi/entry.cgi")
+	resp, err := dsm.sendRequest("", &info, params, "webapi/entry.cgi")
 	if err != nil {
-		return SharePrivilege{}, err
+		return SharePrivilege{}, nfsPrivilegeErrCodeMapping(resp.ErrorCode, err)
 	}
 
 	return info, nil
