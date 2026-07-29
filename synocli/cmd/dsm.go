@@ -13,6 +13,9 @@ import (
 
 var https = false
 var port = -1
+var tlsCACertFile = ""
+var tlsServerName = ""
+var insecureSkipVerify = false
 
 var cmdDsm = &cobra.Command{
 	Use:   "dsm",
@@ -36,12 +39,25 @@ var cmdDsmLogin = &cobra.Command{
 			defaultPort = port
 		}
 
+		var tlsCACert string
+		if tlsCACertFile != "" {
+			pem, err := os.ReadFile(tlsCACertFile)
+			if err != nil {
+				fmt.Printf("Failed to read TLS CA cert file: %v\n", err)
+				os.Exit(1)
+			}
+			tlsCACert = string(pem)
+		}
+
 		dsmApi := &webapi.DSM{
 			Ip:       args[0],
 			Username: args[1],
 			Password: args[2],
 			Port:     defaultPort,
 			Https:    https,
+			TLSCACert:          tlsCACert,
+			TLSServerName:      tlsServerName,
+			InsecureSkipVerify: insecureSkipVerify,
 		}
 
 		err := dsmApi.Login()
@@ -112,6 +128,9 @@ func ListDsms(id int) ([]*webapi.DSM, error) {
 			Username: info.Clients[i].Username,
 			Password: info.Clients[i].Password,
 			Https:    info.Clients[i].Https,
+			TLSCACert:          info.Clients[i].TLSCACert,
+			TLSServerName:      info.Clients[i].TLSServerName,
+			InsecureSkipVerify: info.Clients[i].InsecureSkipVerify,
 		}
 		dsms = append(dsms, dsm)
 	}
@@ -128,4 +147,7 @@ func init() {
 
 	cmdDsmLogin.PersistentFlags().BoolVar(&https, "https", false, "Use HTTPS to login DSM")
 	cmdDsmLogin.PersistentFlags().IntVarP(&port, "port", "p", -1, "Use assigned port to login DSM")
+	cmdDsmLogin.PersistentFlags().StringVar(&tlsCACertFile, "tlsCACertFile", "", "Path to TLS CA certificate PEM file")
+	cmdDsmLogin.PersistentFlags().StringVar(&tlsServerName, "tlsServerName", "", "Override TLS server name for certificate validation")
+	cmdDsmLogin.PersistentFlags().BoolVar(&insecureSkipVerify, "insecureSkipVerify", false, "Skip TLS certificate verification (insecure)")
 }

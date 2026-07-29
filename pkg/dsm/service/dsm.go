@@ -44,6 +44,9 @@ func (service *DsmService) AddDsm(client common.ClientInfo) error {
 		Username: client.Username,
 		Password: client.Password,
 		Https:    client.Https,
+		TLSCACert:          client.TLSCACert,
+		TLSServerName:      client.TLSServerName,
+		InsecureSkipVerify: client.InsecureSkipVerify,
 	}
 	err := dsm.Login()
 	if err != nil {

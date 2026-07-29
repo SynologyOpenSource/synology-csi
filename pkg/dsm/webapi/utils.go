@@ -21,6 +21,9 @@ func (dsm *DSM) GetAnotherController() (*DSM, error) {
 		Username: dsm.Username,
 		Password: dsm.Password,
 		Https:    dsm.Https,
+		TLSCACert:          dsm.TLSCACert,
+		TLSServerName:      dsm.TLSServerName,
+		InsecureSkipVerify: dsm.InsecureSkipVerify,
 	}
 
 	netListA, err := dsm.NetworkInterfaceList("node0")

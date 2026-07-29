@@ -12,6 +12,14 @@ clientInfoSecret:
       password: password
       port: 5001
       username: username
+      # (optional) tlsCACert: PEM-encoded CA certificate to verify the DSM HTTPS endpoint.
+      # Required when DSM uses a self-signed certificate.
+      # tlsCACert: |
+      #   -----BEGIN CERTIFICATE-----
+      #   ...
+      #   -----END CERTIFICATE-----
+      # tlsServerName: ""            # (optional) Override TLS server name, e.g. when connecting by IP.
+      # insecureSkipVerify: false    # (optional) Disable TLS verification. Not recommended; use tlsCACert instead.
   # Whether to create the secret if the chart gets installed or not; ignored on updates.
   create: false
   # Defaults to {{ include "synology-csi.fullname" $ }}-client-info if empty or not present:

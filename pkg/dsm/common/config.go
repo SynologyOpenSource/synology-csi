@@ -16,6 +16,9 @@ type ClientInfo struct {
 	Https           bool   `yaml:"https"`
 	Username        string `yaml:"username"`
 	Password        string `yaml:"password"`
+	TLSCACert          string `yaml:"tlsCACert"`
+	TLSServerName      string `yaml:"tlsServerName"`
+	InsecureSkipVerify bool   `yaml:"insecureSkipVerify"`
 }
 
 type SynoInfo struct {

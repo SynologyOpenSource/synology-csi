@@ -16,3 +16,15 @@ clients:
 #https:                     # set this true to use https. you need to specify the port to DSM HTTPS port as well
 #username:                  # username
 #password:                  # password
+# tlsCACert: (optional) PEM-encoded CA certificate to verify the DSM HTTPS endpoint.
+# Use this when DSM uses a self-signed certificate. The system CA pool is always
+# included, so certificates signed by a trusted CA need not be specified here.
+#tlsCACert: |
+#  -----BEGIN CERTIFICATE-----
+#  ...
+#  -----END CERTIFICATE-----
+#tlsServerName:             # (optional) Override the server name used for TLS verification. Useful when
+#                           # connecting by IP but the DSM certificate is issued to a hostname.
+#insecureSkipVerify:        # (optional) Set true to disable TLS certificate verification entirely.
+#                           # WARNING: this exposes DSM credentials to man-in-the-middle attacks.
+#                           # Only use when tlsCACert cannot be provided.

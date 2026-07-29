@@ -6,6 +6,7 @@ package webapi
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -24,7 +25,10 @@ type DSM struct {
 	Password   string
 	Sid        string
 	Https      bool
-	Controller string //new
+	Controller string
+	TLSCACert          string
+	TLSServerName      string
+	InsecureSkipVerify bool
 	SystemInfo
 }
 
@@ -50,6 +54,42 @@ type Response struct {
 	Data       interface{}
 }
 
+func (dsm *DSM) newHTTPClient() (*http.Client, error) {
+	if !dsm.Https {
+		return &http.Client{}, nil
+	}
+
+	tlsCfg := &tls.Config{}
+
+	if dsm.TLSServerName != "" {
+		tlsCfg.ServerName = dsm.TLSServerName
+	}
+
+	if dsm.InsecureSkipVerify {
+		if dsm.TLSCACert != "" {
+			log.Warnf("tlsCACert is configured but will be ignored for DSM %s because insecureSkipVerify is true.", dsm.Ip)
+		}
+		log.Warnf("TLS certificate verification is disabled for DSM %s. "+
+			"This is insecure; provide tlsCACert instead.", dsm.Ip)
+		tlsCfg.InsecureSkipVerify = true
+	} else if dsm.TLSCACert != "" {
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			log.Warnf("Failed to load system CA pool for DSM %s, falling back to empty pool: %v", dsm.Ip, err)
+			pool = x509.NewCertPool()
+		}
+		if ok := pool.AppendCertsFromPEM([]byte(dsm.TLSCACert)); !ok {
+			return nil, fmt.Errorf("failed to parse TLS CA certificate for DSM %s", dsm.Ip)
+		}
+		tlsCfg.RootCAs = pool
+	}
+
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSClientConfig = tlsCfg
+
+	return &http.Client{Transport: tr}, nil
+}
+
 func (dsm *DSM) sendRequest(data string, apiTemplate interface{}, params url.Values, cgiPath string) (Response, error) {
 	resp, err := dsm.sendRequestWithoutConnectionCheck(data, apiTemplate, params, cgiPath)
 	if err != nil && (resp.ErrorCode == 105 || resp.ErrorCode == 106 || resp.ErrorCode == 119) { // 105: WEBAPI_ERR_NO_PERMISSION, 106: session timeout, 119: WEBAPI_ERR_SID_NOT_FOUND
@@ -65,19 +105,16 @@ func (dsm *DSM) sendRequest(data string, apiTemplate interface{}, params url.Val
 }
 
 func (dsm *DSM) sendRequestWithoutConnectionCheck(data string, apiTemplate interface{}, params url.Values, cgiPath string) (Response, error) {
-	client := &http.Client{}
+	client, err := dsm.newHTTPClient()
+	if err != nil {
+		return Response{}, err
+	}
+
 	var req *http.Request
-	var err error
 	var cgiUrl string
 
 	// Ex: http://10.12.12.14:5000/webapi/auth.cgi
 	if dsm.Https {
-		// TODO: input CA certificate and fill in tls config
-		// Skip Verify when https
-		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}
-		client = &http.Client{Transport: tr}
 		cgiUrl = fmt.Sprintf("https://%s:%d/%s", dsm.Ip, dsm.Port, cgiPath)
 	} else {
 		cgiUrl = fmt.Sprintf("http://%s:%d/%s", dsm.Ip, dsm.Port, cgiPath)

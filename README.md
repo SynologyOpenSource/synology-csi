@@ -40,6 +40,9 @@ The Synology CSI driver supports:
     - *port*: The port for connecting to DSM. The default HTTP port is 5000 and 5001 for HTTPS. Only change this if you use a different port.
     - *https*: Set "true" to use HTTPS for secure connections. Make sure the port is properly configured as well.
     - *username*, *password*: The credentials for connecting to DSM.
+    - *tlsCACert*: (Optional) PEM-encoded CA certificate used to verify the DSM HTTPS endpoint. Required when DSM uses a self-signed certificate. The system CA pool is always included, so certificates signed by a trusted CA (e.g. Let's Encrypt) do not need to be specified here.
+    - *tlsServerName*: (Optional) Override the server name used for TLS verification. Required when `host` is an IP address and the DSM certificate only has DNS SANs (the default for DSM self-signed certificates). Set this to the hostname in the certificate's CN or SAN field (e.g. `synology`).
+    - *insecureSkipVerify*: (Optional) Set "true" to disable TLS certificate verification entirely. **Not recommended** — use `tlsCACert` instead. A warning will be logged on every connection when this is enabled.
 
 5. Install
     * **YAML**
@@ -91,6 +94,10 @@ Create a secret to specify the storage system address and credentials (username 
         https: true
         username: <username>
         password: <password>
+        tlsCACert: |
+          -----BEGIN CERTIFICATE-----
+          <DSM self-signed certificate PEM>
+          -----END CERTIFICATE-----
       ```
     The `clients` field can contain more than one Synology NAS. Seperate them with a prefix `-`.
 
