@@ -22,6 +22,7 @@ The Synology CSI driver supports:
 - Synology NAS running:
     * DSM 7.0 or above
     * DSM UC 3.1 or above
+    * DSME 1.0 or above
 - Go version 1.21 or above is recommended
 - (Optional) Both [Volume Snapshot CRDs](https://github.com/kubernetes-csi/external-snapshotter/tree/v4.0.0/client/config/crd) and the [common snapshot controller](https://github.com/kubernetes-csi/external-snapshotter/tree/v4.0.0/deploy/kubernetes/snapshot-controller) must be installed in your Kubernetes cluster if you want to use the **Snapshot** feature
 
@@ -176,6 +177,21 @@ Create and apply StorageClasses with the properties you want.
     allowVolumeExpansion: true
     ```
 
+    **NVMe/TCP Protocol**
+    ```
+    apiVersion: storage.k8s.io/v1
+    kind: StorageClass
+    metadata:
+      name: synology-nvme-storage
+    provisioner: csi.san.synology.com
+    parameters:
+      protocol: "nvme" # required for nvme protocol
+      # dsm: "192.168.1.1"
+      # location: '/volume1'
+    reclaimPolicy: Delete
+    allowVolumeExpansion: true
+    ```
+
 2. Configure the StorageClass properties by assigning the parameters in the table. You can also leave blank if you don’t have a preference:
 
     | Name                                             | Type   | Description                                                                                                                                                        | Default | Supported protocols |
@@ -183,7 +199,7 @@ Create and apply StorageClasses with the properties you want.
     | *dsm*                                            | string | The IPv4 address of your DSM, which must be included in the `client-info.yml` for the CSI driver to log in to DSM                                                  | -       | iSCSI, SMB, NFS     |
     | *location*                                       | string | The location (/volume1, /volume2, ...) on DSM where the LUN for *PersistentVolume* will be created                                                                 | -       | iSCSI, SMB, NFS     |
     | *fsType*                                         | string | The formatting file system of the *PersistentVolumes* when you mount them on the pods. This parameter only works with iSCSI. For SMB, the fsType is always ‘cifs‘. | 'ext4'  | iSCSI               |
-    | *protocol*                                       | string | The storage backend protocol. Enter ‘iscsi’ to create LUNs, or ‘smb‘ or 'nfs' to create shared folders on DSM.                                                     | 'iscsi' | iSCSI, SMB, NFS     |
+    | *protocol*                                       | string | The storage backend protocol. Enter ‘iscsi’ to create LUNs, 'nvme' to create NVMe namespaces, or ‘smb‘ or 'nfs' to create shared folders on DSM.                   | 'iscsi' | iSCSI, SMB, NFS, NVMe |
     | *formatOptions*                                  | string | Additional options/arguments passed to `mkfs.*` command. See a linux manual that corresponds with your FS of choice.                                               | -       | iSCSI               |
     | *enableSpaceReclamation*                         | string | Enables space reclamation for Thin Provisioned Btrfs LUNs to improve storage efficiency. May impact performance and space display.                                 | 'false' | iSCSI               |
     | *enableFuaSyncCache*                             | string | Enables FUA and Sync Cache SCSI commands for LUNs.                                                                                                                 | 'false' | iSCSI               |
