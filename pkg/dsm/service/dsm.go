@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"strconv"
+	"sync"
 	"time"
 	"strings"
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/common"
@@ -22,7 +23,23 @@ import (
 )
 
 type DsmService struct {
-	dsms map[string]*webapi.DSM
+	// mutex guards dsms, which the background login retry in main.go writes to
+	// while the gRPC handlers are already reading it.
+	mutex sync.RWMutex
+	dsms  map[string]*webapi.DSM
+}
+
+// listDsms returns a snapshot of the registered DSMs, so that callers can iterate
+// without holding the lock across the DSM API calls they make on each one.
+func (service *DsmService) listDsms() []*webapi.DSM {
+	service.mutex.RLock()
+	defer service.mutex.RUnlock()
+
+	dsms := make([]*webapi.DSM, 0, len(service.dsms))
+	for _, dsm := range service.dsms {
+		dsms = append(dsms, dsm)
+	}
+	return dsms
 }
 
 func NewDsmService() *DsmService {
@@ -33,7 +50,11 @@ func NewDsmService() *DsmService {
 
 func (service *DsmService) AddDsm(client common.ClientInfo) error {
 	// TODO: use sn or other identifiers as key
-	if _, ok := service.dsms[client.Host]; ok {
+	service.mutex.RLock()
+	_, ok := service.dsms[client.Host]
+	service.mutex.RUnlock()
+
+	if ok {
 		log.Infof("Adding DSM [%s] already present.", client.Host)
 		return nil
 	}
@@ -53,13 +74,16 @@ func (service *DsmService) AddDsm(client common.ClientInfo) error {
 		return fmt.Errorf("Failed to get system info of DSM: [%s]. err: %v", dsm.Ip, err)
 	}
 
+	service.mutex.Lock()
 	service.dsms[dsm.Ip] = dsm
+	service.mutex.Unlock()
+
 	log.Infof("Add DSM [%s] hostname: %s.", dsm.Ip, dsm.Hostname)
 	return nil
 }
 
 func (service *DsmService) RemoveAllDsms() {
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.listDsms() {
 		log.Infof("Going to logout DSM [%s]", dsm.Ip)
 
 		for i := 0; i < 3; i++ {
@@ -74,7 +98,10 @@ func (service *DsmService) RemoveAllDsms() {
 }
 
 func (service *DsmService) GetDsm(ip string) (*webapi.DSM, error) {
+	service.mutex.RLock()
 	dsm, ok := service.dsms[ip]
+	service.mutex.RUnlock()
+
 	if !ok {
 		return nil, fmt.Errorf("Requested dsm [%s] does not exist", ip)
 	}
@@ -82,13 +109,16 @@ func (service *DsmService) GetDsm(ip string) (*webapi.DSM, error) {
 }
 
 func (service *DsmService) GetDsmsCount() int {
+	service.mutex.RLock()
+	defer service.mutex.RUnlock()
+
 	return len(service.dsms)
 }
 
 func (service *DsmService) ListDsmVolumes(ip string) ([]webapi.VolInfo, error) {
 	var allVolInfos []webapi.VolInfo
 
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.listDsms() {
 		if ip != "" && dsm.Ip != ip {
 			continue
 		}
@@ -554,7 +584,7 @@ func (service *DsmService) CreateVolume(spec *models.CreateK8sVolumeSpec) (*mode
 	}
 
 	/* Find appropriate dsm to create volume */
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.listDsms() {
 		if spec.DsmIp != "" && spec.DsmIp != dsm.Ip {
 			continue
 		}
@@ -655,7 +685,7 @@ func (service *DsmService) DeleteVolume(volId string) error {
 }
 
 func (service *DsmService) listISCSIVolumes(dsmIp string) (infos []*models.K8sVolumeRespSpec) {
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.listDsms() {
 		if dsmIp != "" && dsmIp != dsm.Ip {
 			continue
 		}
@@ -942,7 +972,7 @@ func (service *DsmService) listISCSISnapshotsByDsm(dsm *webapi.DSM) (infos []*mo
 func (service *DsmService) ListAllSnapshots() []*models.K8sSnapshotRespSpec {
 	var allInfos []*models.K8sSnapshotRespSpec
 
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.listDsms() {
 		allInfos = append(allInfos, service.listISCSISnapshotsByDsm(dsm)...)
 		allInfos = append(allInfos, service.listSMBorNFSSnapshotsByDsm(dsm)...)
 		allInfos = append(allInfos, service.listNVMeSnapshotsByDsm(dsm)...)
@@ -1030,7 +1060,7 @@ func DsmSanSnapshotToK8sSnapshot(dsmIp string, info webapi.SnapshotInfo, protoco
 }
 
 func (service *DsmService) getISCSISnapshot(snapshotUuid string) *models.K8sSnapshotRespSpec {
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.listDsms() {
 		snapshots := service.listISCSISnapshotsByDsm(dsm)
 		for _, snap := range snapshots {
 			if snap.Uuid == snapshotUuid {

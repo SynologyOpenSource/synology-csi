@@ -5,16 +5,20 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"github.com/SynologyOpenSource/synology-csi/pkg/driver"
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/common"
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/service"
+	"github.com/SynologyOpenSource/synology-csi/pkg/interfaces"
 	"github.com/SynologyOpenSource/synology-csi/pkg/logger"
 	"github.com/SynologyOpenSource/synology-csi/pkg/utils/hostexec"
 )
@@ -60,24 +64,52 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+// loginDsms logs in to every configured DSM, retrying the ones that fail until
+// they all answer or the backoff gives up.
+//
+// The retry matters at boot. A DSM that is still starting - after a power cut the
+// NAS routinely needs several minutes longer than the nodes it serves - refuses the
+// login, and a single attempt leaves the driver running with an empty DSM set: the
+// pod stays Running and Ready, its probes pass, and every volume operation it is
+// handed fails until someone restarts it by hand.
+func loginDsms(dsmService interfaces.IDsmService, clients []common.ClientInfo, bo backoff.BackOff) error {
+	remaining := clients
+
+	login := func() error {
+		var failed []common.ClientInfo
+		for _, client := range remaining {
+			if err := dsmService.AddDsm(client); err != nil {
+				log.Warnf("Failed to add DSM: %s, error: %v", client.Host, err)
+				failed = append(failed, client)
+			}
+		}
+		remaining = failed
+
+		if len(remaining) > 0 {
+			return fmt.Errorf("%d of %d DSMs could not be logged in", len(remaining), len(clients))
+		}
+		return nil
+	}
+
+	notify := func(err error, duration time.Duration) {
+		log.Infof("%v, retrying in %3.2f seconds .....", err, float64(duration.Seconds()))
+	}
+
+	return backoff.RetryNotify(login, bo, notify)
+}
+
 func driverStart() error {
 	log.Infof("CSI Options = {%s, %s, %s}", csiNodeID, csiEndpoint, csiClientInfoPath)
 
 	dsmService := service.NewDsmService()
 
-	// 1. Login DSMs by given ClientInfo
+	// 1. Load the DSM ClientInfo
 	info, err := common.LoadConfig(csiClientInfoPath)
 	if err != nil {
 		log.Errorf("Failed to read config: %v", err)
 		return err
 	}
 
-	for _, client := range info.Clients {
-		err := dsmService.AddDsm(client)
-		if err != nil {
-			log.Errorf("Failed to add DSM: %s, error: %v", client.Host, err)
-		}
-	}
 	defer dsmService.RemoveAllDsms()
 
 	// 2. Create command executor
@@ -101,6 +133,23 @@ func driverStart() error {
 		return err
 	}
 	drv.Activate()
+
+	// 4. Log in to the DSMs, once the socket exists.
+	//
+	// Deliberately after Activate() and in the background: the node plugin's
+	// teardown path (NodeUnstageVolume, NodeUnpublishVolume) is plain unmounting
+	// and needs no DSM, so it must keep being served while the NAS is away -
+	// otherwise an unreachable NAS would also stop pods from terminating and
+	// block node drains.
+	loginBackoff := backoff.NewExponentialBackOff()
+	loginBackoff.InitialInterval = 1 * time.Second
+	loginBackoff.MaxInterval = 5 * time.Minute // a wrong password must not hammer DSM's auto-block
+	loginBackoff.MaxElapsedTime = 0            // keep retrying for as long as the driver runs
+	go func() {
+		if err := loginDsms(dsmService, info.Clients, loginBackoff); err != nil {
+			log.Errorf("Failed to add DSM, giving up. err: %v", err)
+		}
+	}()
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
