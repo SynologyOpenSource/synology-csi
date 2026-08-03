@@ -623,7 +623,7 @@ func (service *DsmService) DeleteVolume(volId string) error {
 			if  _, err := dsm.SubsystemGet(subsystem.Uuid); err != nil && errors.Is(err, utils.FailedToGetSubsystemError("")) {
 				return nil
 			}
-			log.Errorf("[%s] Failed to delete Subsystem(%d): %v", dsm.Ip, subsystem.Uuid, err)
+			log.Errorf("[%s] Failed to delete Subsystem(%s): %v", dsm.Ip, subsystem.Uuid, err)
 			return err
 		}
 	} else {
