@@ -185,7 +185,7 @@ func (service *DsmService) createSMBorNFSVolumeByDsm(dsm *webapi.DSM, spec *mode
 }
 
 func (service *DsmService) listSMBorNFSVolumes(dsmIp string) (infos []*models.K8sVolumeRespSpec) {
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.listDsms() {
 		if dsmIp != "" && dsmIp != dsm.Ip {
 			continue
 		}
@@ -238,7 +238,7 @@ func (service *DsmService) listSMBorNFSSnapshotsByDsm(dsm *webapi.DSM) (infos []
 }
 
 func (service *DsmService) getSMBorNFSSnapshot(snapshotUuid string) *models.K8sSnapshotRespSpec {
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.listDsms() {
 		snapshots := service.listSMBorNFSSnapshotsByDsm(dsm)
 		for _, snap := range snapshots {
 			if snap.Uuid == snapshotUuid {

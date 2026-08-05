@@ -193,7 +193,7 @@ func (service *DsmService) createNVMeVolumeByDsm(dsm *webapi.DSM, spec *models.C
 }
 
 func (service *DsmService) listNVMeVolumes(dsmIp string) (infos []*models.K8sVolumeRespSpec) {
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.listDsms() {
 		if dsmIp != "" && dsmIp != dsm.Ip {
 			continue
 		}
