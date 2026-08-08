@@ -103,7 +103,7 @@ func shareErrCodeMapping(errCode int, oriErr error) error {
 	}
 
 	if errCode >= 3300 {
-		return utils.ShareDefaultError{errCode}
+		return utils.ShareDefaultError{ErrCode: errCode}
 	}
 	return oriErr
 }
