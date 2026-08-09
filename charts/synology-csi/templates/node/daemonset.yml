@@ -1,0 +1,118 @@
+kind: DaemonSet
+apiVersion: apps/v1
+metadata:
+  name: {{ include "synology-csi.fullname" . }}-node
+  labels:
+    {{- include "synology-csi.labels" . | nindent 4 }}    
+spec:
+  selector:
+    matchLabels:
+      app: {{ include "synology-csi.fullname" . }}-node
+  template:
+    metadata:
+      {{- with .Values.node.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}      
+      labels:
+        app: {{ include "synology-csi.fullname" . }}-node
+    spec:
+      serviceAccount: {{ include "synology-csi.fullname" . }}-node-sa
+      hostNetwork: true
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.node.podSecurityContext | nindent 8 }}             
+      containers:
+        - name: csi-driver-registrar
+          securityContext:
+            privileged: true
+          imagePullPolicy: {{ index .Values "node" "csi-driver-registrar" "image" "pullPolicy" }}
+          image: {{ index .Values "node" "csi-driver-registrar" "image" "repository" }}:{{ index .Values "node" "csi-driver-registrar" "image" "tag" }}
+          args:
+            - --v=5
+            - --csi-address=$(ADDRESS)                         # the csi socket path inside the pod
+            - --kubelet-registration-path=$(REGISTRATION_PATH) # the csi socket path on the host node
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+            - name: REGISTRATION_PATH
+              value: /var/lib/kubelet/plugins/csi.san.synology.com/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+        - name: csi-plugin
+          securityContext:
+            privileged: true
+          imagePullPolicy: {{ index .Values "node" "csi-plugin" "image" "pullPolicy" }}
+          image: {{ index .Values "node" "csi-plugin" "image" "repository" }}:{{ default .Chart.AppVersion (index .Values "node" "csi-plugin" "image" "tag") }}
+          args:
+            - --nodeid=$(KUBE_NODE_NAME)
+            - --endpoint=$(CSI_ENDPOINT)
+            - --client-info
+            - /etc/synology/client-info.yml
+            - --log-level=info
+          env:
+            - name: CSI_ENDPOINT
+              value: unix://csi/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: "Bidirectional"
+            - name: plugin-dir
+              mountPath: /csi
+            - name: client-info
+              mountPath: /etc/synology
+              readOnly: true
+            - name: host-root
+              mountPath: /host
+            - name: device-dir
+              mountPath: /dev
+      {{- with .Values.node.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.node.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.node.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}                 
+      volumes:
+        - name: kubelet-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/csi.san.synology.com/
+            type: DirectoryOrCreate
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+        - name: client-info
+          secret:
+            secretName: {{ .Values.clientInfoSecretName }}
+        - name: host-root
+          hostPath:
+            path: /
+            type: Directory
+        - name: device-dir
+          hostPath:
+            path: /dev
+            type: Directory
