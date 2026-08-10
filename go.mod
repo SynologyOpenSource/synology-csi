@@ -1,6 +1,6 @@
 module github.com/SynologyOpenSource/synology-csi
 
-go 1.21
+go 1.25
 
 require (
 	github.com/antonfisher/nested-logrus-formatter v1.3.1
