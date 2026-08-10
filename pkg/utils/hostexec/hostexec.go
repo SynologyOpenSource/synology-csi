@@ -62,6 +62,36 @@ func (h *hostexec) wrapEnv(cmd string, args ...string) (string, []string) {
 		return cmd, args
 	}
 
+	// Check if we're in a chroot environment and if /usr/bin/env exists
+	envPath := "/usr/bin/env"
+	if h.chrootDir != "" {
+		envPath = h.chrootDir + "/usr/bin/env"
+	}
+	
+	// Check if env exists, if not, try to find the command directly
+	if _, err := os.Stat(envPath); os.IsNotExist(err) {
+		// On Talos and similar systems, /usr/bin/env might not exist
+		// Try to find the command in the default search paths
+		for _, dir := range defaultSearchPath {
+			testPath := dir + "/" + cmd
+			if h.chrootDir != "" {
+				testPath = h.chrootDir + testPath
+			}
+			if _, err := os.Stat(testPath); err == nil {
+				// Found the command, use its full path
+				if h.chrootDir != "" {
+					// Remove the chroot prefix as it will be added by wrapChroot
+					return strings.TrimPrefix(testPath, h.chrootDir), args
+				}
+				return testPath, args
+			}
+		}
+		// If we can't find the command, fall back to using it without path
+		// and let the shell handle it
+		return cmd, args
+	}
+
+	// Normal path with env available
 	sp := fmt.Sprintf("PATH=%s", strings.Join(defaultSearchPath, ":"))
 	args = append([]string{"-i", sp, cmd}, args...)
 	cmd = "/usr/bin/env"
