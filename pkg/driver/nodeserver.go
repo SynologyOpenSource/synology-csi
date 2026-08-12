@@ -18,6 +18,7 @@ package driver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -415,7 +416,24 @@ func (ns *nodeServer) setNFSVolumePrivilege(sourcePath string, hostnames []strin
 		})
 	}
 
-	err = dsm.ShareNfsPrivilegeSave(priv)
+	privilegeBackoff := backoff.NewExponentialBackOff()
+	privilegeBackoff.InitialInterval = 2 * time.Second
+	privilegeBackoff.Multiplier = 2
+	privilegeBackoff.RandomizationFactor = 0.1
+	privilegeBackoff.MaxElapsedTime = 30 * time.Second
+
+	privilegeNotify := func(err error, duration time.Duration) {
+		log.Infof("Share NFS privilege system busy, retrying in %3.2f seconds.....", float64(duration.Seconds()))
+	}
+
+	err = backoff.RetryNotify(func() error {
+		saveErr := dsm.ShareNfsPrivilegeSave(priv)
+		if saveErr != nil && !errors.Is(saveErr, utils.ShareSystemBusyError("")) {
+			return backoff.Permanent(saveErr)
+		}
+		return saveErr
+	}, privilegeBackoff, privilegeNotify)
+
 	if err != nil {
 		log.Printf("Failed to save share NFS privilege. Priv:%v. %v", priv, err)
 		return err
