@@ -59,6 +59,13 @@ func getSizeByCapacityRange(capRange *csi.CapacityRange) (int64, error) {
 	return int64(minSize), nil
 }
 
+// isShareProtocol reports whether the protocol is backed by a DSM share, which
+// serves files over the network and therefore cannot expose a raw block device.
+// iSCSI and NVMe-TCP support volumeMode: Block.
+func isShareProtocol(protocol string) bool {
+	return protocol == utils.ProtocolNfs || protocol == utils.ProtocolSmb
+}
+
 func (cs *controllerServer) isVolumeAccessModeSupport(mode csi.VolumeCapability_AccessMode_Mode) bool {
 	for _, accessMode := range cs.Driver.getVolumeCapabilityAccessModes() {
 		if mode == accessMode.Mode {
@@ -116,12 +123,33 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	if volCap == nil {
 		return nil, status.Errorf(codes.InvalidArgument, "No volume capabilities are provided")
 	}
+
+	params := req.GetParameters()
+
+	// Parsed before the capability loop below, which needs the protocol to tell
+	// whether the requested access type can be served.
+	protocol := strings.ToLower(params["protocol"])
+	if protocol == "" {
+		protocol = utils.ProtocolDefault
+	} else if !isProtocolSupport(protocol) {
+		return nil, status.Error(codes.InvalidArgument, "Unsupported volume protocol")
+	}
+
 	var mountOptions []string
 	for _, cap := range volCap {
 		accessMode := cap.GetAccessMode().GetMode()
 
 		if !cs.isVolumeAccessModeSupport(accessMode) {
 			return nil, status.Errorf(codes.InvalidArgument, "Invalid volume capability access mode")
+		}
+
+		// Share-backed protocols hand out a directory, never a raw block device,
+		// so reject the combination here rather than creating a share that the
+		// node would later refuse to stage.
+		if cap.GetBlock() != nil && isShareProtocol(protocol) {
+			return nil, status.Errorf(codes.InvalidArgument,
+				"%s protocol does not support volumeMode: Block; use volumeMode: Filesystem instead",
+				strings.ToUpper(protocol))
 		}
 
 		if accessMode == csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER {
@@ -145,18 +173,9 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}
 	}
 
-	params := req.GetParameters()
-
 	isThin := true
 	if params["thin_provisioning"] != "" {
 		isThin = utils.StringToBoolean(params["thin_provisioning"])
-	}
-
-	protocol := strings.ToLower(params["protocol"])
-	if protocol == "" {
-		protocol = utils.ProtocolDefault
-	} else if !isProtocolSupport(protocol) {
-		return nil, status.Error(codes.InvalidArgument, "Unsupported volume protocol")
 	}
 
 	// not needed during CreateVolume method
@@ -214,7 +233,13 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	// idempotency
 	// Note: an SMB PV may not be tested existed precisely because the share folder name was sliced from k8sVolumeName
-	k8sVolume := cs.dsmService.GetVolumeByName(volName)
+	k8sVolume, err := cs.dsmService.GetVolumeByName(volName)
+	if err != nil {
+		// Creating anyway could produce a second volume for the same PVC, so
+		// let the caller retry once the DSM can be listed again.
+		return nil, status.Errorf(codes.Unavailable,
+			"Couldn't determine whether volume[%s] already exists: %v", volName, err)
+	}
 	if k8sVolume == nil {
 		k8sVolume, err = cs.dsmService.CreateVolume(spec)
 		if err != nil {
@@ -281,7 +306,12 @@ func (cs *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req 
 		return nil, status.Error(codes.InvalidArgument, "No volume capabilities are provided")
 	}
 
-	if cs.dsmService.GetVolume(volumeId) == nil {
+	k8sVolume, err := cs.dsmService.GetVolume(volumeId)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable,
+			"Couldn't determine whether volume[%s] exists: %v", volumeId, err)
+	}
+	if k8sVolume == nil {
 		return nil, status.Errorf(codes.NotFound, "Volume[%s] does not exist", volumeId)
 	}
 
@@ -291,7 +321,23 @@ func (cs *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req 
 		}
 	}
 
-	return &csi.ValidateVolumeCapabilitiesResponse{}, nil
+	// CSI expects an unsupported capability to be reported by leaving Confirmed
+	// unset with an explanation, not by failing the RPC.
+	for _, cap := range volCap {
+		if cap.GetBlock() != nil && isShareProtocol(k8sVolume.Protocol) {
+			return &csi.ValidateVolumeCapabilitiesResponse{
+				Message: fmt.Sprintf(
+					"%s protocol does not support volumeMode: Block; use volumeMode: Filesystem instead",
+					strings.ToUpper(k8sVolume.Protocol)),
+			}, nil
+		}
+	}
+
+	return &csi.ValidateVolumeCapabilitiesResponse{
+		Confirmed: &csi.ValidateVolumeCapabilitiesResponse_Confirmed{
+			VolumeCapabilities: volCap,
+		},
+	}, nil
 }
 
 func (cs *controllerServer) ListVolumes(ctx context.Context, req *csi.ListVolumesRequest) (*csi.ListVolumesResponse, error) {
@@ -306,7 +352,11 @@ func (cs *controllerServer) ListVolumes(ctx context.Context, req *csi.ListVolume
 	}
 
 	pagingSkip := ("" != startingToken)
-	infos := cs.dsmService.ListVolumes()
+	infos, err := cs.dsmService.ListVolumes()
+	if err != nil {
+		// A truncated list would read as "these volumes are gone" to the caller.
+		return nil, status.Errorf(codes.Unavailable, "Couldn't list volumes: %v", err)
+	}
 
 	sort.Sort(models.ByVolumeId(infos))
 

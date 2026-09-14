@@ -93,7 +93,7 @@ spec:
             allowPrivilegeEscalation: true
           image: registry.k8s.io/sig-storage/csi-provisioner:v3.0.0
           args:
-            - --timeout=60s
+            - --timeout=120s
             - --csi-address=$(ADDRESS)
             - --v=5
             - --extra-create-metadata
@@ -131,6 +131,7 @@ spec:
           args:
             - --v=5
             - --csi-address=$(ADDRESS)
+            - --timeout=120s
           env:
             - name: ADDRESS
               value: /var/lib/csi/sockets/pluginproxy/csi.sock

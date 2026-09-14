@@ -94,7 +94,7 @@ spec:
         - name: csi-provisioner
           args:
             - --csi-address=$(ADDRESS)
-            - --timeout=60s
+            - --timeout=120s
             - --v=5
           env:
             - name: ADDRESS
@@ -134,6 +134,7 @@ spec:
           args:
             - --csi-address=$(ADDRESS)
             - --v=5
+            - --timeout=120s
           env:
             - name: ADDRESS
               value: /var/lib/csi/sockets/pluginproxy/csi.sock

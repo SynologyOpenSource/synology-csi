@@ -21,6 +21,7 @@ package driver
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -161,6 +162,40 @@ func (t *tools) iscsiadm_logout(iqn string) error {
 	return nil
 }
 
+// iscsiadm_delete_node removes the node record for a target. The record is
+// separate from the session: logging out ends the session but leaves the record
+// behind, and iscsid then retries the login every 60 seconds against a target
+// DSM has already deleted. Reported in #138, where a node kept doing that
+// across reboots until the record was removed by hand.
+func (t *tools) iscsiadm_delete_node(iqn string, portal string) error {
+	cmd := t.iscsiadm(
+		"-m", "node",
+		"--targetname", iqn,
+		"--portal", portal,
+		"-o", "delete")
+	if _, err := cmd.CombinedOutput(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// blockdev_flushbufs writes out anything the kernel still holds for a block
+// device and drops its buffers.
+//
+// Raw block volumes are written through the page cache with no filesystem to
+// flush them, so the data reaches the LUN only when the last opener closes it.
+// Nothing in unstage waited for that before tearing the session down, which
+// leaves the write racing the next node's read. The in-tree iSCSI plugin does
+// the same thing on its detach path. It is a no-op on a device that is already
+// clean.
+func (t *tools) blockdev_flushbufs(devPath string) error {
+	cmd := t.executor.Command("blockdev", "--flushbufs", devPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%s (%v)", string(out), err)
+	}
+	return nil
+}
+
 func (t *tools) iscsiadm_rescan(iqn string) error {
 	cmd := t.iscsiadm(
 		"-m", "node",
@@ -222,19 +257,29 @@ func (d *initiatorDriver) login(targetIqn string, portal string) error {
 }
 
 func (d *initiatorDriver) logout(targetIqn string, ip string) error {
-	if !d.tools.hasSession(targetIqn, "") {
-		log.Infof("Session[%s] doesn't exist.", targetIqn)
-		return nil
-	}
-
 	portal := fmt.Sprintf("%s:%d", ip, ISCSIPort)
-	if err := d.tools.iscsiadm_logout(targetIqn); err != nil {
-		log.Errorf("Failed in logout of the target.\nTarget [%s], Portal [%s], Err[%v]",
-			targetIqn, portal, err)
-		return err
+
+	if d.tools.hasSession(targetIqn, "") {
+		if err := d.tools.iscsiadm_logout(targetIqn); err != nil {
+			log.Errorf("Failed in logout of the target.\nTarget [%s], Portal [%s], Err[%v]",
+				targetIqn, portal, err)
+			return err
+		}
+		log.Infof("Logout target portal [%s], iqn [%s].", portal, targetIqn)
+	} else {
+		log.Infof("Session[%s] doesn't exist.", targetIqn)
 	}
 
-	log.Infof("Logout target portal [%s], iqn [%s].", portal, targetIqn)
+	// Deliberately outside the session check: the case that leaves iscsid
+	// retrying forever is exactly the one where the session is already gone but
+	// the record is not, so returning early on "no session" would skip the
+	// cleanup precisely when it is needed.
+	if err := d.tools.iscsiadm_delete_node(targetIqn, portal); err != nil {
+		// Not fatal. The volume is detached either way; what is left behind is
+		// a record that makes noise rather than one that breaks anything.
+		log.Warnf("Failed to remove the iSCSI node record for target [%s] portal [%s], "+
+			"iscsid may keep retrying the login: %v", targetIqn, portal, err)
+	}
 
 	return nil
 }
@@ -255,4 +300,25 @@ func (d *initiatorDriver) rescan(targetIqn string) error {
 	log.Infof("Rescan target iqn [%s].", targetIqn)
 
 	return nil
+}
+
+// fsyncDevice opens a block device and fsyncs it, which makes the kernel
+// write back its dirty pages and then send a SYNCHRONIZE CACHE to the target
+// (the LUNs advertise write-back caching, so the flush is not elided).
+//
+// It exists because BLKFLSBUF alone is not enough: the DSM's iSCSI backstore
+// acknowledges writes into the DSM's own page cache and never fsyncs them, so
+// after the pre-logout flush the data exists only in the DSM's memory. Taking
+// a snapshot or clone of the LUN in that state can lose the data from the
+// source LUN while the copy keeps it -- measured directly: a 1MiB write left
+// the backing file at 0 allocated blocks until this fsync, which brought it
+// to 2048. CSI unstage always precedes the snapshot and clone operations
+// Kubernetes tests do, so syncing here closes that window.
+func (t *tools) fsyncDevice(devPath string) error {
+	f, err := os.OpenFile(devPath, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
 }

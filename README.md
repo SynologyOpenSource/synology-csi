@@ -30,6 +30,7 @@ The Synology CSI driver supports:
 1. Before installing the CSI driver, make sure you have created and initialized at least one **storage pool** and one **volume** on your DSM.
 2. Make sure that all the worker nodes in your Kubernetes cluster can connect to your DSM.
 3. After you complete the steps below, the *full* deployment of the CSI driver, including the snapshotter, will be installed. If you don’t need the **Snapshot** feature, you can install the *basic* deployment of the CSI driver instead.
+4. Since v1.4.0 the driver image runs as a non-root user (`USER 1000`) to satisfy the Red Hat container certification's *RunAsNonRoot* requirement. The node component still needs root for mounting, `iscsiadm`, and the host `chroot`, so the node DaemonSet in the provided manifests overrides this with `securityContext.runAsUser: 0` alongside `privileged: true`. If you write your own node manifest, keep `runAsUser: 0`, because `privileged: true` alone does not change the container's runtime user.
 
 ### Procedure
 1. Clone the git repository. `git clone https://github.com/SynologyOpenSource/synology-csi.git`
@@ -124,10 +125,9 @@ Create and apply StorageClasses with the properties you want.
       name: synostorage
     provisioner: csi.san.synology.com
     parameters:
-      fsType: 'btrfs'
+      fsType: 'ext4'
       dsm: '192.168.1.1'
       location: '/volume1'
-      formatOptions: '--nodiscard'
     reclaimPolicy: Retain
     allowVolumeExpansion: true
     ```
@@ -205,7 +205,7 @@ Create and apply StorageClasses with the properties you want.
     | ------------------------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- | ------------------- |
     | *dsm*                                            | string | The IPv4 address of your DSM, which must be included in the `client-info.yml` for the CSI driver to log in to DSM                                                  | -       | iSCSI, SMB, NFS     |
     | *location*                                       | string | The location (/volume1, /volume2, ...) on DSM where the LUN for *PersistentVolume* will be created                                                                 | -       | iSCSI, SMB, NFS     |
-    | *fsType*                                         | string | The formatting file system of the *PersistentVolumes* when you mount them on the pods. This parameter only works with iSCSI. For SMB, the fsType is always ‘cifs‘. | 'ext4'  | iSCSI               |
+    | *fsType*                                         | string | The formatting file system of the *PersistentVolumes* when you mount them on the pods. This parameter only works with iSCSI. Supported values are `ext4` and `xfs`; `btrfs` is **no longer supported since v1.4.0** (see the notice below). For SMB, the fsType is always ‘cifs‘. | 'ext4'  | iSCSI               |
     | *protocol*                                       | string | The storage backend protocol. Enter ‘iscsi’ to create LUNs, 'nvme' to create NVMe namespaces, or ‘smb‘ or 'nfs' to create shared folders on DSM.                   | 'iscsi' | iSCSI, SMB, NFS, NVMe |
     | *formatOptions*                                  | string | Additional options/arguments passed to `mkfs.*` command. See a linux manual that corresponds with your FS of choice.                                               | -       | iSCSI               |
     | *enableSpaceReclamation*                         | string | Enables space reclamation for Thin Provisioned Btrfs LUNs to improve storage efficiency. May impact performance and space display.                                 | 'false' | iSCSI               |
@@ -218,6 +218,7 @@ Create and apply StorageClasses with the properties you want.
 
     - If you leave the parameter *location* blank, the CSI driver will choose a volume on DSM with available storage to create the volumes.
     - All iSCSI volumes created by the CSI driver are Thin Provisioned LUNs on DSM. This will allow you to take snapshots of them.
+    - **Btrfs `fsType` is no longer supported (since v1.4.0).** The driver image is now based on Red Hat UBI9, which does not ship `btrfs-progs`, so the driver can no longer run `mkfs.btrfs` inside the container to format an iSCSI volume. Use `ext4` (the default) or `xfs` instead. This only affects the client-side filesystem chosen with `fsType`; DSM-side Btrfs LUNs are unaffected — `enableSpaceReclamation` and Btrfs-backed volumes on DSM keep working, since those are DSM storage attributes and need no in-container tools. If you already have iSCSI PersistentVolumes formatted as Btrfs, migrate them to `ext4` or `xfs`: v1.4.0 can no longer create Btrfs volumes, and on RHEL-based nodes (including OpenShift/RHCOS, whose kernels lack Btrfs) it cannot mount existing ones either. To keep using existing Btrfs volumes, stay on a pre-v1.4.0 driver.
 
 3. Apply the YAML files to the Kubernetes cluster.
 

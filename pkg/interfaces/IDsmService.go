@@ -18,13 +18,16 @@ type IDsmService interface {
 	ListDsmVolumes(ip string) ([]webapi.VolInfo, error)
 	CreateVolume(spec *models.CreateK8sVolumeSpec) (*models.K8sVolumeRespSpec, error)
 	DeleteVolume(volId string) error
-	ListVolumes() []*models.K8sVolumeRespSpec
-	GetVolume(volId string) *models.K8sVolumeRespSpec
+	// A non-nil error means the listing was incomplete: absence from the result
+	// does not prove a volume is gone.
+	ListVolumes() ([]*models.K8sVolumeRespSpec, error)
+	// Returns (nil, nil) only when the volume is known not to exist.
+	GetVolume(volId string) (*models.K8sVolumeRespSpec, error)
 	ExpandVolume(volId string, newSize int64) (*models.K8sVolumeRespSpec, error)
 	CreateSnapshot(spec *models.CreateK8sVolumeSnapshotSpec) (*models.K8sSnapshotRespSpec, error)
 	DeleteSnapshot(snapshotUuid string) error
 	ListAllSnapshots() []*models.K8sSnapshotRespSpec
 	ListSnapshots(volId string) []*models.K8sSnapshotRespSpec
-	GetVolumeByName(volName string) *models.K8sVolumeRespSpec
+	GetVolumeByName(volName string) (*models.K8sVolumeRespSpec, error)
 	GetSnapshotByName(snapshotName string) *models.K8sSnapshotRespSpec
 }

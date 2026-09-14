@@ -25,6 +25,7 @@ build: bin/synology-csi-driver bin/synocli
 bin:
 	@mkdir -p $@
 
+
 bin/synology-csi-driver: bin FORCE
 	@echo "Compiling $@…"
 	@$(BUILD_ENV) go build -v -ldflags $(BUILD_FLAGS) -o $@ ./

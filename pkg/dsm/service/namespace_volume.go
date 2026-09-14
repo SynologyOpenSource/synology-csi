@@ -17,7 +17,15 @@ import (
 	"github.com/SynologyOpenSource/synology-csi/pkg/utils"
 )
 
-func (service *DsmService) createMappingSubsystem(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, namespaceUuid string) (*webapi.SubsystemInfo, error) {
+func (service *DsmService) createMappingSubsystem(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, namespaceUuid string) (subsystem *webapi.SubsystemInfo, retErr error) {
+	// The subsystem is this function's to clean up; the caller owns the namespace.
+	var rollback createRollback
+	defer func() {
+		if retErr != nil {
+			rollback.run(dsm.Ip)
+		}
+	}()
+
 	genNqn := func() string {
 		nqn := models.NqnPrefix + fmt.Sprintf("%s.%s", dsm.Hostname, spec.K8sVolumeName)
 		nqn = strings.ReplaceAll(nqn, "_", "-")
@@ -36,8 +44,14 @@ func (service *DsmService) createMappingSubsystem(dsm *webapi.DSM, spec *models.
 	log.Debugf("SubsystemCreate spec: %v", subsystemSpec)
 	subsystemUuid, err := dsm.SubsystemCreate(subsystemSpec)
 
-	if err != nil && !errors.Is(err, utils.AlreadyExistError("")) {
-		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to create subsystem with spec: %v, err: %v", subsystemSpec, err))
+	if err != nil {
+		if !errors.Is(err, utils.AlreadyExistError("")) {
+			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to create subsystem with spec: %v, err: %v", subsystemSpec, err))
+		}
+		// Left by an earlier attempt, so not ours to remove.
+	} else {
+		createdUuid := subsystemUuid
+		rollback.add(fmt.Sprintf("subsystem(%s)", subsystemSpec.Name), func() error { return dsm.SubsystemDelete(createdUuid) })
 	}
 
 	subsystemInfo, err := dsm.SubsystemGet(subsystemUuid)
@@ -52,9 +66,16 @@ func (service *DsmService) createMappingSubsystem(dsm *webapi.DSM, spec *models.
 	return subsystemInfo, nil
 }
 
-func (service *DsmService) createNVMeVolumeBySnapshot(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, srcSnapshot *models.K8sSnapshotRespSpec) (*models.K8sVolumeRespSpec, error) {
-	if spec.Size != 0 && spec.Size != srcSnapshot.SizeInBytes {
-		return nil, status.Errorf(codes.OutOfRange, "Requested namespace size [%d] is not equal to snapshot size [%d]", spec.Size, srcSnapshot.SizeInBytes)
+func (service *DsmService) createNVMeVolumeBySnapshot(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, srcSnapshot *models.K8sSnapshotRespSpec) (volume *models.K8sVolumeRespSpec, retErr error) {
+	var rollback createRollback
+	defer func() {
+		if retErr != nil {
+			rollback.run(dsm.Ip)
+		}
+	}()
+
+	if err := checkRestoreSize(spec.Size, srcSnapshot.SizeInBytes, "namespace"); err != nil {
+		return nil, err
 	}
 
 	if !dsm.SupportNvmeof { // should not enter here
@@ -66,9 +87,20 @@ func (service *DsmService) createNVMeVolumeBySnapshot(dsm *webapi.DSM, spec *mod
 		SrcSnapshotUuid: srcSnapshot.Uuid,
 	}
 
-	if _, err := dsm.NamespaceSnapshotClone(snapshotCloneSpec); err != nil && !errors.Is(err, utils.AlreadyExistError("")) {
-		return nil,
-			status.Errorf(codes.Internal, fmt.Sprintf("Failed to create volume with source snapshot ID: %s, err: %v", srcSnapshot.Uuid, err))
+	if _, err := dsm.NamespaceSnapshotClone(snapshotCloneSpec); err != nil {
+		if !errors.Is(err, utils.AlreadyExistError("")) {
+			return nil,
+				status.Errorf(codes.Internal, fmt.Sprintf("Failed to create volume with source snapshot ID: %s, err: %v", srcSnapshot.Uuid, err))
+		}
+	} else {
+		backendName := spec.BackendName
+		rollback.add(fmt.Sprintf("namespace(%s)", backendName), func() error {
+			ns, err := dsm.NamespaceGet(backendName)
+			if err != nil {
+				return err
+			}
+			return dsm.NamespaceDelete(ns.Uuid)
+		})
 	}
 
 	if err := waitCloneFinished(dsm, spec.BackendName, spec.Protocol); err != nil {
@@ -79,6 +111,18 @@ func (service *DsmService) createNVMeVolumeBySnapshot(dsm *webapi.DSM, spec *mod
 	if err != nil {
 		return nil,
 			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get existed nvme namespace with name: %s, err: %v", spec.BackendName, err))
+	}
+
+	// A clone comes back the size of its source; grow it if the PVC asked for
+	// more. Failing here rolls the namespace back rather than returning a
+	// volume smaller than promised.
+	if newSize := needsExpandTo(spec.Size, int64(namespaceInfo.Size)); newSize > 0 {
+		if err := dsm.NamespaceSet(webapi.NamespaceSetSpec{Uuid: namespaceInfo.Uuid, NewSize: uint64(newSize)}); err != nil {
+			return nil, status.Errorf(codes.Internal,
+				"Failed to expand the restored namespace[%s] from [%d] to [%d], err: %v",
+				namespaceInfo.Uuid, namespaceInfo.Size, newSize, err)
+		}
+		namespaceInfo.Size = uint64(newSize)
 	}
 
 	subsystemInfo, err := service.createMappingSubsystem(dsm, spec, namespaceInfo.Uuid)
@@ -93,9 +137,16 @@ func (service *DsmService) createNVMeVolumeBySnapshot(dsm *webapi.DSM, spec *mod
 	return DsmNamespaceToK8sVolume(dsm.Ip, *namespaceInfo, *subsystemInfo), nil
 }
 
-func (service *DsmService) createNVMeVolumeByVolume(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, srcNamespaceInfo webapi.NamespaceInfo) (*models.K8sVolumeRespSpec, error) {
-	if spec.Size != 0 && spec.Size != int64(srcNamespaceInfo.Size) {
-		return nil, status.Errorf(codes.OutOfRange, "Requested namespace size [%d] is not equal to src namespace size [%d]", spec.Size, srcNamespaceInfo.Size)
+func (service *DsmService) createNVMeVolumeByVolume(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec, srcNamespaceInfo webapi.NamespaceInfo) (volume *models.K8sVolumeRespSpec, retErr error) {
+	var rollback createRollback
+	defer func() {
+		if retErr != nil {
+			rollback.run(dsm.Ip)
+		}
+	}()
+
+	if err := checkRestoreSize(spec.Size, int64(srcNamespaceInfo.Size), "namespace"); err != nil {
+		return nil, err
 	}
 
 	if !dsm.SupportNvmeof { // should not enter here
@@ -112,9 +163,20 @@ func (service *DsmService) createNVMeVolumeByVolume(dsm *webapi.DSM, spec *model
 		Location:     spec.Location,
 	}
 
-	if _, err := dsm.NamespaceClone(namespaceCloneSpec); err != nil && !errors.Is(err, utils.AlreadyExistError("")) {
-		return nil,
-			status.Errorf(codes.Internal, fmt.Sprintf("Failed to create volume with source volume ID: %s, err: %v", srcNamespaceInfo.Uuid, err))
+	if _, err := dsm.NamespaceClone(namespaceCloneSpec); err != nil {
+		if !errors.Is(err, utils.AlreadyExistError("")) {
+			return nil,
+				status.Errorf(codes.Internal, fmt.Sprintf("Failed to create volume with source volume ID: %s, err: %v", srcNamespaceInfo.Uuid, err))
+		}
+	} else {
+		backendName := spec.BackendName
+		rollback.add(fmt.Sprintf("namespace(%s)", backendName), func() error {
+			ns, err := dsm.NamespaceGet(backendName)
+			if err != nil {
+				return err
+			}
+			return dsm.NamespaceDelete(ns.Uuid)
+		})
 	}
 
 	if err := waitCloneFinished(dsm, spec.BackendName, spec.Protocol); err != nil {
@@ -125,6 +187,18 @@ func (service *DsmService) createNVMeVolumeByVolume(dsm *webapi.DSM, spec *model
 	if err != nil {
 		return nil,
 			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get existed nvme namespace with name: [%s], err: %v", spec.BackendName, err))
+	}
+
+	// A clone comes back the size of its source; grow it if the PVC asked for
+	// more. Failing here rolls the namespace back rather than returning a
+	// volume smaller than promised.
+	if newSize := needsExpandTo(spec.Size, int64(namespaceInfo.Size)); newSize > 0 {
+		if err := dsm.NamespaceSet(webapi.NamespaceSetSpec{Uuid: namespaceInfo.Uuid, NewSize: uint64(newSize)}); err != nil {
+			return nil, status.Errorf(codes.Internal,
+				"Failed to expand the restored namespace[%s] from [%d] to [%d], err: %v",
+				namespaceInfo.Uuid, namespaceInfo.Size, newSize, err)
+		}
+		namespaceInfo.Size = uint64(newSize)
 	}
 
 	subsystemInfo, err := service.createMappingSubsystem(dsm, spec, namespaceInfo.Uuid)
@@ -139,7 +213,14 @@ func (service *DsmService) createNVMeVolumeByVolume(dsm *webapi.DSM, spec *model
 	return DsmNamespaceToK8sVolume(dsm.Ip, *namespaceInfo, *subsystemInfo), nil
 }
 
-func (service *DsmService) createNVMeVolumeByDsm(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec) (*models.K8sVolumeRespSpec, error) {
+func (service *DsmService) createNVMeVolumeByDsm(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec) (volume *models.K8sVolumeRespSpec, retErr error) {
+	var rollback createRollback
+	defer func() {
+		if retErr != nil {
+			rollback.run(dsm.Ip)
+		}
+	}()
+
 	// 1. Find a available location
 	if spec.Location == "" {
 		vol, err := service.getFirstAvailableVolume(dsm, spec.Size, spec.Protocol)
@@ -169,8 +250,19 @@ func (service *DsmService) createNVMeVolumeByDsm(dsm *webapi.DSM, spec *models.C
 
 	log.Debugf("NamespaceCreate spec: %v", namespaceSpec)
 	_, err = dsm.NamespaceCreate(namespaceSpec)
-	if err != nil && !errors.Is(err, utils.AlreadyExistError("")) {
-		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to create namespace, err: %v", err))
+	if err != nil {
+		if !errors.Is(err, utils.AlreadyExistError("")) {
+			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to create namespace, err: %v", err))
+		}
+	} else {
+		backendName := spec.BackendName
+		rollback.add(fmt.Sprintf("namespace(%s)", backendName), func() error {
+			ns, err := dsm.NamespaceGet(backendName)
+			if err != nil {
+				return err
+			}
+			return dsm.NamespaceDelete(ns.Uuid)
+		})
 	}
 
 	namespaceInfo, err := dsm.NamespaceGet(spec.BackendName)
@@ -192,7 +284,10 @@ func (service *DsmService) createNVMeVolumeByDsm(dsm *webapi.DSM, spec *models.C
 	return DsmNamespaceToK8sVolume(dsm.Ip, *namespaceInfo, *subsystemInfo), nil
 }
 
-func (service *DsmService) listNVMeVolumes(dsmIp string) (infos []*models.K8sVolumeRespSpec) {
+// listNVMeVolumes returns the namespaces it could enumerate. A non-nil error
+// means the list is incomplete, so absence from it does not prove a volume is
+// gone.
+func (service *DsmService) listNVMeVolumes(dsmIp string) (infos []*models.K8sVolumeRespSpec, listErr error) {
 	for _, dsm := range service.dsms {
 		if dsmIp != "" && dsmIp != dsm.Ip {
 			continue
@@ -204,6 +299,7 @@ func (service *DsmService) listNVMeVolumes(dsmIp string) (infos []*models.K8sVol
 		namespaceInfos, err := dsm.NamespaceList()
 		if err != nil {
 			log.Errorf("[%s] Failed to list namespaces: %v", dsm.Ip, err)
+			listErr = errors.Join(listErr, fmt.Errorf("DSM[%s] failed to list namespaces: %w", dsm.Ip, err))
 			continue
 		}
 
@@ -217,13 +313,17 @@ func (service *DsmService) listNVMeVolumes(dsmIp string) (infos []*models.K8sVol
 
 			subsystemInfo, err := dsm.SubsystemGet(ns.SubsystemUuid)
 			if err != nil {
+				// SubsystemGet returns a nil pointer on failure, so this must
+				// not fall through to the dereference below.
 				log.Errorf("[%s] Failed to get Subsystem(%s): %v", dsm.Ip, ns.SubsystemUuid, err)
+				listErr = errors.Join(listErr, fmt.Errorf("DSM[%s] failed to get subsystem(%s): %w", dsm.Ip, ns.SubsystemUuid, err))
+				continue
 			}
 
 			infos = append(infos, DsmNamespaceToK8sVolume(dsm.Ip, ns, *subsystemInfo))
 		}
 	}
-	return infos
+	return infos, listErr
 }
 
 func (service *DsmService) listNVMeSnapshotsByDsm(dsm *webapi.DSM) (infos []*models.K8sSnapshotRespSpec) {
@@ -231,7 +331,10 @@ func (service *DsmService) listNVMeSnapshotsByDsm(dsm *webapi.DSM) (infos []*mod
 		return infos
 	}
 
-	volumes := service.listNVMeVolumes(dsm.Ip)
+	volumes, err := service.listNVMeVolumes(dsm.Ip)
+	if err != nil {
+		log.Errorf("[%s] Namespace list was incomplete while listing snapshots: %v", dsm.Ip, err)
+	}
 	for _, volume := range volumes {
 		nsInfo := volume.Namespace
 		nsSnaps, err := dsm.NamespaceSnapshotList(nsInfo.Uuid)

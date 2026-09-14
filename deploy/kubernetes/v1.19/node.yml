@@ -85,6 +85,11 @@ spec:
         - name: csi-plugin
           securityContext:
             privileged: true
+            # The image declares USER 1000 (container certification's
+            # RunAsNonRoot check); the node plugin genuinely needs root for
+            # mount/format and chroot into the host, so override it here.
+            # privileged alone does not change the runtime user.
+            runAsUser: 0
           imagePullPolicy: IfNotPresent
           image: synology/synology-csi:v1.3.1
           args:

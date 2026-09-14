@@ -72,6 +72,7 @@ spec:
           args:
             - --csi-address=$(ADDRESS)
             - --v=5
+            - --timeout=120s
           env:
             - name: ADDRESS
               value: /var/lib/csi/sockets/pluginproxy/csi.sock

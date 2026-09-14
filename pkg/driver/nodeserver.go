@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -210,7 +211,7 @@ func (ns *nodeServer) getPortals(dsmIp string) []string {
 	if dsm.IsUC() && ns.tools.IsMultipathEnabled() {
 		dsm2, err := dsm.GetAnotherController()
 		if err != nil {
-			log.Errorf("[%s] UC failed to get another controller: %v", err)
+			log.Errorf("[%s] UC failed to get another controller: %v", dsmIp, err)
 		} else {
 			portals = append(portals, fmt.Sprintf("%s:%d", dsm2.Ip, ISCSIPort))
 		}
@@ -220,8 +221,11 @@ func (ns *nodeServer) getPortals(dsmIp string) []string {
 
 func (ns *nodeServer) loginNVMeSubsystem(volumeId string) ([]string, error) {
 	paths := []string{}
-	k8sVolume := ns.dsmService.GetVolume(volumeId)
-
+	k8sVolume, err := ns.dsmService.GetVolume(volumeId)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable,
+			"Couldn't determine whether volume[%s] exists: %v", volumeId, err)
+	}
 	if k8sVolume == nil {
 		return nil, status.Error(codes.NotFound, fmt.Sprintf("Volume[%s] is not found", volumeId))
 	}
@@ -266,37 +270,43 @@ func (ns *nodeServer) logoutNVMeSubsystem(nqn string) {
 	}
 }
 
-func (ns *nodeServer) loginTarget(volumeId string) ([]string, error) {
-	paths := []string{}
-	k8sVolume := ns.dsmService.GetVolume(volumeId)
-
+// loginTarget logs the node in to the volume's target and returns the by-path
+// device links, along with the target IQN and LUN number they are supposed to
+// stand for -- the caller is expected to verify that before trusting them.
+func (ns *nodeServer) loginTarget(volumeId string) (paths []string, iqn string, lun int, err error) {
+	k8sVolume, err := ns.dsmService.GetVolume(volumeId)
+	if err != nil {
+		return nil, "", 0, status.Errorf(codes.Unavailable,
+			"Couldn't determine whether volume[%s] exists: %v", volumeId, err)
+	}
 	if k8sVolume == nil {
-		return nil, status.Error(codes.NotFound, fmt.Sprintf("Volume[%s] is not found", volumeId))
+		return nil, "", 0, status.Error(codes.NotFound, fmt.Sprintf("Volume[%s] is not found", volumeId))
 	}
 
 	portals := ns.getPortals(k8sVolume.DsmIp)
 	if len(portals) == 0 {
-		return nil, status.Errorf(codes.Internal, "Failed to get portals")
+		return nil, "", 0, status.Errorf(codes.Internal, "Failed to get portals")
 	}
 
 	// Assume target and lun 1-1 mapping
-	mappingIndex := k8sVolume.Target.MappedLuns[0].MappingIndex
+	iqn = k8sVolume.Target.Iqn
+	lun = k8sVolume.Target.MappedLuns[0].MappingIndex
 	for _, portal := range portals {
-		if err := ns.Initiator.login(k8sVolume.Target.Iqn, portal); err != nil {
-			return nil, status.Errorf(codes.Internal,
-				fmt.Sprintf("Failed to login with target iqn [%s], err: %v", k8sVolume.Target.Iqn, err))
+		if err := ns.Initiator.login(iqn, portal); err != nil {
+			return nil, "", 0, status.Errorf(codes.Internal,
+				fmt.Sprintf("Failed to login with target iqn [%s], err: %v", iqn, err))
 		}
 
-		path := fmt.Sprintf("%sip-%s-iscsi-%s-lun-%d", "/dev/disk/by-path/", portal, k8sVolume.Target.Iqn, mappingIndex)
+		path := fmt.Sprintf("%sip-%s-iscsi-%s-lun-%d", "/dev/disk/by-path/", portal, iqn, lun)
 		if err := waitForDevicePathToExist(path); err != nil {
 			log.Errorf("Can't find device path [%s]: %v", path, err)
-			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Can't find device path [%s]: %v", path, err))
+			return nil, "", 0, status.Errorf(codes.Internal, fmt.Sprintf("Can't find device path [%s]: %v", path, err))
 		}
 
 		paths = append(paths, path)
 	}
 
-	return paths, nil
+	return paths, iqn, lun, nil
 }
 
 func (ns *nodeServer) logoutTarget(k8sVolume *models.K8sVolumeRespSpec) {
@@ -308,6 +318,29 @@ func (ns *nodeServer) logoutTarget(k8sVolume *models.K8sVolumeRespSpec) {
 	mappingIndex := k8sVolume.Target.MappedLuns[0].MappingIndex
 	volumeMountPath := ns.tools.getExistedVolumeMountPath(k8sVolume.Target.Iqn, mappingIndex)
 
+	// Push anything still in the page cache out to the LUN before the session
+	// goes away. A filesystem volume was already flushed by the Unmount above,
+	// but a raw block volume has no filesystem to do that, so its last writes
+	// may still be in memory here -- and once we log out there is nothing left
+	// to write them with. The next reader, on this node or another, then sees
+	// stale contents with no error to indicate it.
+	//
+	// Harmless when there is nothing to flush, which is why it is not limited to
+	// block volumes.
+	if volumeMountPath == "" {
+		log.Warnf("No device path resolved for target[%s], skipping the pre-logout flush; "+
+			"anything still in the page cache will not reach the LUN",
+			k8sVolume.Target.Iqn)
+	} else if err := ns.tools.fsyncDevice(volumeMountPath); err != nil {
+		log.Errorf("Failed to fsync device %s before logout, its last writes may only exist in the DSM's memory: %v",
+			volumeMountPath, err)
+	} else if err := ns.tools.blockdev_flushbufs(volumeMountPath); err != nil {
+		log.Errorf("Failed to flush device %s before logout, its last writes may not have reached the LUN: %v",
+			volumeMountPath, err)
+	} else {
+		log.Infof("Flushed device %s before logout of target[%s]", volumeMountPath, k8sVolume.Target.Iqn)
+	}
+
 	if strings.Contains(volumeMountPath, "/dev/mapper") && ns.tools.IsMultipathEnabled() {
 		if err := ns.tools.multipath_flush(volumeMountPath); err != nil {
 			log.Errorf("Failed to remove multipath device in path %s. err: %v", volumeMountPath, err)
@@ -315,6 +348,19 @@ func (ns *nodeServer) logoutTarget(k8sVolume *models.K8sVolumeRespSpec) {
 	}
 
 	ns.Initiator.logout(k8sVolume.Target.Iqn, k8sVolume.DsmIp)
+}
+
+// XFS refuses to mount a filesystem whose UUID is already in use on the host.
+// Cloning a volume or restoring one from a snapshot copies the LUN at the block
+// level, so the copy carries the source UUID and cannot be mounted alongside it
+// ("Filesystem has duplicate UUID ... - can't mount"). Mounting with nouuid
+// skips that check, which is what the in-tree iSCSI plugin and the other CSI
+// drivers supporting xfs do. ext4 has no such restriction.
+func withXfsMountOptions(fsType string, options []string) []string {
+	if fsType != "xfs" || utils.SliceContains(options, "nouuid") {
+		return options
+	}
+	return append(options, "nouuid")
 }
 
 func checkGidPresentInMountFlags(volumeMountGroup string, mountFlags []string) (bool, error) {
@@ -381,7 +427,13 @@ func getNodeAddress(ctx context.Context, client clientset.Interface) ([]string, 
 	return ips, nil
 }
 
-func (ns *nodeServer) setNFSVolumePrivilege(sourcePath string, hostnames []string, authType utils.AuthType) error {
+// force skips the rules-already-present shortcut. DSM regenerates the NFS
+// export table as a side effect of saving, and a mount that fails with "No
+// such file or directory" means this share's export entry is gone even though
+// the saved rules still read back fine -- concurrent saves of other shares
+// regenerate the table from state that misses this one. Re-saving is the only
+// API-level way to put the entry back.
+func (ns *nodeServer) setNFSVolumePrivilege(sourcePath string, hostnames []string, authType utils.AuthType, force bool) error {
 	// NFSTODO: fix the parsing rule
 	s := strings.Split(strings.TrimPrefix(sourcePath, "//"), "/")
 	if len(s) != 2 {
@@ -415,12 +467,53 @@ func (ns *nodeServer) setNFSVolumePrivilege(sourcePath string, hostnames []strin
 		})
 	}
 
+	// Every node stages with the same rule set, because the clients are all of
+	// the cluster's node IPs rather than this node's. Writing it once per node
+	// per mount is therefore N-1 redundant writes, and DSM's save is not
+	// protected by a lock -- concurrent saves can report success without taking
+	// effect, and they do not only interfere per share: in a standalone repro,
+	// twenty saves against twenty *different* shares still lost rules.
+	//
+	// So the cheapest thing that helps is to not write at all when the rules are
+	// already there. Reading is safe to do concurrently (twelve parallel loads
+	// were tested clean), which leaves at most one writer per share instead of
+	// one per node.
+	if force {
+		// Skip the shortcut: the point of this save is the export-table
+		// regeneration, not the rules.
+	} else if current, err := dsm.ShareNfsPrivilegeLoad(shareName); err != nil {
+		// Fall through and save: failing to read is not a reason to skip
+		// setting up the export the mount is about to depend on.
+		log.Infof("Couldn't read the current NFS privilege of share(%s), saving anyway: %v", shareName, err)
+	} else if len(missingNfsPrivilegeClients(current, priv)) == 0 {
+		log.Debugf("NFS privilege of share(%s) already grants every node, skipping save", shareName)
+		return nil
+	}
+
 	err = dsm.ShareNfsPrivilegeSave(priv)
 	if err != nil {
 		log.Printf("Failed to save share NFS privilege. Priv:%v. %v", priv, err)
 		return err
 	}
 	return nil
+}
+
+// missingNfsPrivilegeClients returns the clients in want that current does not
+// already grant the same access to. It matches the check DSM's own rules are
+// verified against after a save.
+func missingNfsPrivilegeClients(current, want webapi.SharePrivilege) []string {
+	granted := make(map[string]string, len(current.Rule))
+	for _, rule := range current.Rule {
+		granted[rule.Client] = rule.Privilege
+	}
+
+	var missing []string
+	for _, rule := range want.Rule {
+		if granted[rule.Client] != rule.Privilege {
+			missing = append(missing, rule.Client)
+		}
+	}
+	return missing
 }
 
 func (ns *nodeServer) setSMBVolumePermission(sourcePath string, userName string, authType utils.AuthType) error {
@@ -459,13 +552,41 @@ func (ns *nodeServer) setSMBVolumePermission(sourcePath string, userName string,
 	return dsm.SharePermissionSet(spec)
 }
 
+// growFilesystemIfNeeded grows the filesystem to fill its device.
+//
+// A volume restored or cloned into a larger PVC gets a device of the requested
+// size but a filesystem that is still the size of the source, because the copy
+// includes the filesystem as it was. Nothing else grows it: kubelet only calls
+// NodeExpandVolume when a PVC is resized, and this volume was never resized --
+// it was created large. So the first stage is where it has to happen.
+//
+// A no-op when the filesystem already fills the device, which is every volume
+// that was not restored from a smaller source.
+func (ns *nodeServer) growFilesystemIfNeeded(devicePath, mountPath string) error {
+	resizer := mount.NewResizeFs(ns.Mounter.Exec)
+
+	needed, err := resizer.NeedResize(devicePath, mountPath)
+	if err != nil {
+		return fmt.Errorf("couldn't tell whether the filesystem on %s needs to grow: %w", devicePath, err)
+	}
+	if !needed {
+		return nil
+	}
+
+	log.Infof("Filesystem on %s is smaller than the device, growing it to fill %s", devicePath, mountPath)
+	if _, err := resizer.Resize(devicePath, mountPath); err != nil {
+		return fmt.Errorf("failed to grow the filesystem on %s: %w", devicePath, err)
+	}
+	return nil
+}
+
 func (ns *nodeServer) nodeStageISCSIVolume(ctx context.Context, spec *models.NodeStageVolumeSpec) (*csi.NodeStageVolumeResponse, error) {
 	// if block mode, skip mount
 	if spec.VolumeCapability.GetBlock() != nil {
 		return &csi.NodeStageVolumeResponse{}, nil
 	}
 
-	iscsiDevPaths, err := ns.loginTarget(spec.VolumeId)
+	iscsiDevPaths, iqn, lun, err := ns.loginTarget(spec.VolumeId)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -473,6 +594,10 @@ func (ns *nodeServer) nodeStageISCSIVolume(ctx context.Context, spec *models.Nod
 	volumeMountPath := getVolumeMountPath(iscsiDevPaths)
 	if volumeMountPath == "" {
 		return nil, status.Error(codes.Internal, "Can't get volume mount path")
+	}
+
+	if err := verifyIscsiDevice(volumeMountPath, iqn, lun, sysfsRoot); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	notMount, err := ns.Mounter.Interface.IsLikelyNotMountPoint(spec.StagingTargetPath)
@@ -486,10 +611,15 @@ func (ns *nodeServer) nodeStageISCSIVolume(ctx context.Context, spec *models.Nod
 
 	fsType := spec.VolumeCapability.GetMount().GetFsType()
 	options := append([]string{"rw"}, spec.VolumeCapability.GetMount().GetMountFlags()...)
+	options = withXfsMountOptions(fsType, options)
 
 	formatOptions := utils.StringToSlice(spec.FormatOptions)
 
 	if err = ns.Mounter.FormatAndMountSensitiveWithFormatOptions(volumeMountPath, spec.StagingTargetPath, fsType, options, nil, formatOptions); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	if err := ns.growFilesystemIfNeeded(volumeMountPath, spec.StagingTargetPath); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -553,12 +683,18 @@ func (ns *nodeServer) nodeStageSMBVolume(ctx context.Context, spec *models.NodeS
 }
 
 func (ns *nodeServer) nodeStageNFSVolume(ctx context.Context, spec *models.NodeStageVolumeSpec) (*csi.NodeStageVolumeResponse, error) {
+	// CreateVolume already rejects this combination; keep the check here for
+	// volumes that never went through it, such as pre-provisioned PVs.
+	if spec.VolumeCapability.GetBlock() != nil {
+		return nil, status.Error(codes.InvalidArgument, "NFS protocol only allows 'mount' access type")
+	}
+
 	nodeIps, err := getNodeAddress(ctx, ns.Client)
 	if err != nil {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to get node IPs for NFS privilege setting, err: %v", err))
 	}
 
-	if err := ns.setNFSVolumePrivilege(spec.Source, nodeIps, utils.AuthTypeReadWrite); err != nil {
+	if err := ns.setNFSVolumePrivilege(spec.Source, nodeIps, utils.AuthTypeReadWrite, false); err != nil {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to set NFS privilege rule, source: %s, err: %v", spec.Source, err))
 	}
 	return &csi.NodeStageVolumeResponse{}, nil
@@ -592,10 +728,15 @@ func (ns *nodeServer) nodeStageNVMeVolume(ctx context.Context, spec *models.Node
 
 	fsType := spec.VolumeCapability.GetMount().GetFsType()
 	options := append([]string{"rw"}, spec.VolumeCapability.GetMount().GetMountFlags()...)
+	options = withXfsMountOptions(fsType, options)
 
 	formatOptions := utils.StringToSlice(spec.FormatOptions)
 
 	if err = ns.Mounter.FormatAndMountSensitiveWithFormatOptions(volumeMountPath, spec.StagingTargetPath, fsType, options, nil, formatOptions); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	if err := ns.growFilesystemIfNeeded(volumeMountPath, spec.StagingTargetPath); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -657,7 +798,13 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 		}
 	}
 
-	k8sVolume := ns.dsmService.GetVolume(volumeId)
+	k8sVolume, err := ns.dsmService.GetVolume(volumeId)
+	if err != nil {
+		// Claiming the volume is unstaged could leave an iSCSI session logged
+		// in with nothing left to clean it up; let kubelet call again instead.
+		return nil, status.Errorf(codes.Unavailable,
+			"Couldn't determine whether volume[%s] exists: %v", volumeId, err)
+	}
 	if k8sVolume == nil {
 		return &csi.NodeUnstageVolumeResponse{}, nil
 	}
@@ -683,7 +830,7 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		return nil, status.Error(codes.InvalidArgument, "Volume capability missing in request")
 	}
 
-	isBlock := req.GetVolumeCapability().GetBlock() != nil // raw block, only for iscsi protocol
+	isBlock := req.GetVolumeCapability().GetBlock() != nil // raw block, for iscsi, nvme-tcp protocol
 	fsType := req.GetVolumeCapability().GetMount().GetFsType()
 	options := []string{}
 	if req.GetReadonly() {
@@ -729,6 +876,24 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 
 		log.Debugf("NodePublishVolume: volumeId(%v) source(%s) targetPath(%s) mountflags(%v)", volumeId, source, targetPath, options)
 		err = ns.Mounter.Mount(source, targetPath, "nfs", options)
+		if err != nil && strings.Contains(err.Error(), "No such file or directory") {
+			// The server has no export for a share that exists and whose
+			// privilege rules read back fine: the export table lost this entry
+			// to a concurrent save of another share. Left alone it stays gone
+			// until some unrelated share operation regenerates the table, which
+			// on a quiet system is never. Re-save the privilege to force the
+			// regeneration, then try once more.
+			log.Warnf("NFS server has no export for %s although the share should have one; "+
+				"re-saving its privilege to regenerate the export table and retrying the mount", source)
+			if nodeIps, ipErr := getNodeAddress(ctx, ns.Client); ipErr != nil {
+				log.Errorf("Failed to get node IPs to restore the export of %s: %v", source, ipErr)
+			} else if saveErr := ns.setNFSVolumePrivilege(
+				"//"+server+"/"+path.Base(baseDir), nodeIps, utils.AuthTypeReadWrite, true); saveErr != nil {
+				log.Errorf("Failed to re-save the NFS privilege of %s: %v", source, saveErr)
+			} else {
+				err = ns.Mounter.Mount(source, targetPath, "nfs", options)
+			}
+		}
 		if err != nil {
 			if os.IsPermission(err) {
 				return nil, status.Error(codes.PermissionDenied, err.Error())
@@ -785,7 +950,7 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	default:
-		iscsiDevPaths, err := ns.loginTarget(volumeId)
+		iscsiDevPaths, iqn, lun, err := ns.loginTarget(volumeId)
 		if err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
@@ -793,6 +958,10 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		volumeMountPath := getVolumeMountPath(iscsiDevPaths)
 		if volumeMountPath == "" {
 			return nil, status.Error(codes.Internal, "Can't get volume mount path")
+		}
+
+		if err := verifyIscsiDevice(volumeMountPath, iqn, lun, sysfsRoot); err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
 		}
 
 		if isBlock {
@@ -866,7 +1035,11 @@ func (ns *nodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 		return nil, status.Error(codes.InvalidArgument, "Invalid Argument")
 	}
 
-	k8sVolume := ns.dsmService.GetVolume(volumeId)
+	k8sVolume, err := ns.dsmService.GetVolume(volumeId)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable,
+			"Couldn't determine whether volume[%s] exists: %v", volumeId, err)
+	}
 	if k8sVolume == nil {
 		return nil, status.Error(codes.NotFound,
 			fmt.Sprintf("Volume[%s] is not found", volumeId))
@@ -934,7 +1107,11 @@ func (ns *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 		return nil, status.Error(codes.InvalidArgument, "InvalidArgument: Please check volume ID and volume path.")
 	}
 
-	k8sVolume := ns.dsmService.GetVolume(volumeId)
+	k8sVolume, err := ns.dsmService.GetVolume(volumeId)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable,
+			"Couldn't determine whether volume[%s] exists: %v", volumeId, err)
+	}
 	if k8sVolume == nil {
 		return nil, status.Error(codes.NotFound, fmt.Sprintf("Volume[%s] is not found", volumeId))
 	}

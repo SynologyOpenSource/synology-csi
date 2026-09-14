@@ -4,13 +4,16 @@ package webapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/SynologyOpenSource/synology-csi/pkg/utils"
 	"github.com/SynologyOpenSource/synology-csi/pkg/logger"
+	"github.com/cenkalti/backoff/v4"
 )
 
 type ShareInfo struct {
@@ -88,6 +91,82 @@ type NfsInfo struct {
 	WriteSize           int    `json:"write_size"`
 }
 
+// DSM rejects share operations while its share subsystem is busy (error 3328).
+// That happens whenever several volumes are created or removed at once, and it
+// clears on its own, so retry instead of failing an operation the caller has no
+// way to act on. Kept below the CSI sidecar provision timeout so the retries
+// finish before the caller gives up.
+const shareBusyRetryTimeout = 30 * time.Second
+
+// shareRequest issues a share API request, maps DSM error codes, and retries
+// while the share subsystem reports it is busy.
+func (dsm *DSM) shareRequest(apiTemplate interface{}, params url.Values) (Response, error) {
+	var resp Response
+
+	err := backoff.Retry(func() error {
+		var reqErr error
+		resp, reqErr = dsm.sendRequest("", apiTemplate, params, "webapi/entry.cgi")
+		mapped := shareErrCodeMapping(resp.ErrorCode, reqErr)
+		if mapped == nil {
+			return nil
+		}
+		if errors.Is(mapped, utils.ShareSystemBusyError("")) {
+			log.Infof("DSM[%s] share subsystem is busy, retrying: %v", dsm.Ip, mapped)
+			return mapped
+		}
+		return backoff.Permanent(mapped)
+	}, shareBusyBackOff())
+
+	return resp, err
+}
+
+// 2370 is WEBAPI_CORE_ERR_NFS_SHARE_LOAD_FAIL: the NFS privilege API could not
+// look the share up. DSM raises it from two situations it does not tell apart —
+// the share is not in the share database, or the shared lock on smb.conf could
+// not be taken within its own five second limit. Only the second one is worth
+// waiting for, and a share that is gone never comes back, so retrying here buys
+// very little: of 169 of these seen in one run, 165 were for a share that had
+// already been deleted.
+//
+// It is kept, and kept short, for the one case it does cover: a share being
+// deleted at the very moment we ask about it. Anything longer only delays the
+// error without changing it.
+const nfsPrivilegeShareLoadFailErrCode = 2370
+
+const nfsPrivilegeRetryTimeout = 10 * time.Second
+
+// nfsPrivilegeRequest issues an NFS share-privilege request, retrying briefly
+// when DSM cannot look the share up. Errors are returned unmapped: the share
+// error-code table belongs to another API namespace.
+func (dsm *DSM) nfsPrivilegeRequest(apiTemplate interface{}, params url.Values, retryTimeout time.Duration) (Response, error) {
+	var resp Response
+
+	err := backoff.Retry(func() error {
+		var reqErr error
+		resp, reqErr = dsm.sendRequest("", apiTemplate, params, "webapi/entry.cgi")
+		if reqErr == nil {
+			return nil
+		}
+		if resp.ErrorCode == nfsPrivilegeShareLoadFailErrCode {
+			log.Infof("DSM[%s] couldn't look up the share for its NFS privilege (error %d), retrying", dsm.Ip, resp.ErrorCode)
+			return reqErr
+		}
+		return backoff.Permanent(reqErr)
+	}, busyBackOff(retryTimeout))
+
+	return resp, err
+}
+
+func shareBusyBackOff() backoff.BackOff {
+	return busyBackOff(shareBusyRetryTimeout)
+}
+
+func busyBackOff(retryTimeout time.Duration) backoff.BackOff {
+	b := backoff.NewExponentialBackOff()
+	b.MaxElapsedTime = retryTimeout
+	return b
+}
+
 func shareErrCodeMapping(errCode int, oriErr error) error {
 	switch errCode {
 	case 402: // No such share
@@ -119,9 +198,9 @@ func (dsm *DSM) ShareGet(shareName string) (ShareInfo, error) {
 
 	info := ShareInfo{}
 
-	resp, err := dsm.sendRequest("", &info, params, "webapi/entry.cgi")
+	_, err := dsm.shareRequest(&info, params)
 
-	return info, shareErrCodeMapping(resp.ErrorCode, err)
+	return info, err
 }
 
 func (dsm *DSM) ShareList() ([]ShareInfo, error) {
@@ -135,9 +214,9 @@ func (dsm *DSM) ShareList() ([]ShareInfo, error) {
 		Shares []ShareInfo `json:"shares"`
 	}
 
-	resp, err := dsm.sendRequest("", &ShareInfos{}, params, "webapi/entry.cgi")
+	resp, err := dsm.shareRequest(&ShareInfos{}, params)
 	if err != nil {
-		return nil, shareErrCodeMapping(resp.ErrorCode, err)
+		return nil, err
 	}
 
 	infos, ok := resp.Data.(*ShareInfos)
@@ -161,9 +240,9 @@ func (dsm *DSM) ShareCreate(spec ShareCreateSpec) error {
 	}
 	params.Add("shareinfo", string(js))
 
-	resp, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
+	_, err = dsm.shareRequest(&struct{}{}, params)
 
-	return shareErrCodeMapping(resp.ErrorCode, err)
+	return err
 }
 
 func (dsm *DSM) ShareClone(spec ShareCloneSpec) (string, error) {
@@ -193,9 +272,9 @@ func (dsm *DSM) ShareClone(spec ShareCloneSpec) (string, error) {
 		Name string `json:"name"`
 	}
 
-	resp, err := dsm.sendRequest("", &ShareCreateResp{}, params, "webapi/entry.cgi")
+	resp, err := dsm.shareRequest(&ShareCreateResp{}, params)
 	if err != nil {
-		return "", shareErrCodeMapping(resp.ErrorCode, err)
+		return "", err
 	}
 
 	shareResp, ok := resp.Data.(*ShareCreateResp)
@@ -213,9 +292,9 @@ func (dsm *DSM) ShareDelete(shareName string) error {
 	params.Add("version", "1")
 	params.Add("name", fmt.Sprintf("[%s]", strconv.Quote(shareName)))
 
-	resp, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
+	_, err := dsm.shareRequest(&struct{}{}, params)
 
-	return shareErrCodeMapping(resp.ErrorCode, err)
+	return err
 }
 
 func (dsm *DSM) ShareSet(shareName string, updateInfo ShareUpdateInfo) error {
@@ -235,9 +314,9 @@ func (dsm *DSM) ShareSet(shareName string, updateInfo ShareUpdateInfo) error {
 		log.Debugln(params)
 	}
 
-	resp, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
+	_, err = dsm.shareRequest(&struct{}{}, params)
 
-	return shareErrCodeMapping(resp.ErrorCode, err)
+	return err
 }
 
 func (dsm *DSM) SetShareQuota(shareInfo ShareInfo, newSizeInMB int64) error {
@@ -273,9 +352,9 @@ func (dsm *DSM) ShareSnapshotCreate(spec ShareSnapshotCreateSpec) (string, error
 	params.Add("snapinfo", string(js))
 
 	var snapTime string
-	resp, err := dsm.sendRequest("", &snapTime, params, "webapi/entry.cgi")
+	_, err = dsm.shareRequest(&snapTime, params)
 	if err != nil {
-		return "", shareErrCodeMapping(resp.ErrorCode, err)
+		return "", err
 	}
 
 	return snapTime, nil // "GMT+08-2022.01.14-19.18.29"
@@ -294,9 +373,9 @@ func (dsm *DSM) ShareSnapshotList(name string) ([]ShareSnapshotInfo, error) {
 		Total     int                 `json:"total"`
 	}
 
-	resp, err := dsm.sendRequest("", &Infos{}, params, "webapi/entry.cgi")
+	resp, err := dsm.shareRequest(&Infos{}, params)
 	if err != nil {
-		return nil, shareErrCodeMapping(resp.ErrorCode, err)
+		return nil, err
 	}
 
 	infos, ok := resp.Data.(*Infos)
@@ -316,9 +395,9 @@ func (dsm *DSM) ShareSnapshotDelete(snapTime string, shareName string) error {
 	params.Add("snapshots", fmt.Sprintf("[%s]", strconv.Quote(snapTime))) // ["GMT+08-2022.01.14-19.18.29"]
 
 	var objmap []map[string]interface{}
-	resp, err := dsm.sendRequest("", &objmap, params, "webapi/entry.cgi")
+	_, err := dsm.shareRequest(&objmap, params)
 	if err != nil {
-		return shareErrCodeMapping(resp.ErrorCode, err)
+		return err
 	}
 
 	if len(objmap) > 0 {
@@ -347,9 +426,9 @@ func (dsm *DSM) SharePermissionSet(spec SharePermissionSetSpec) error {
 		log.Debugln(params)
 	}
 
-	resp, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
+	_, err = dsm.shareRequest(&struct{}{}, params)
 
-	return shareErrCodeMapping(resp.ErrorCode, err)
+	return err
 }
 
 func (dsm *DSM) SharePermissionList(shareName string, userGroupType string) ([]SharePermission, error) {
@@ -364,9 +443,9 @@ func (dsm *DSM) SharePermissionList(shareName string, userGroupType string) ([]S
 		Permissions []SharePermission `json:"items"`
 	}
 
-	resp, err := dsm.sendRequest("", &SharePermissions{}, params, "webapi/entry.cgi")
+	resp, err := dsm.shareRequest(&SharePermissions{}, params)
 	if err != nil {
-		return nil, shareErrCodeMapping(resp.ErrorCode, err)
+		return nil, err
 	}
 
 	infos, ok := resp.Data.(*SharePermissions)
@@ -400,7 +479,57 @@ type SharePrivilege struct {
 	Rule      []PrivilegeRule `json:"rule"`
 }
 
+// DSM's NFS privilege save takes no lock. When several saves run at once it can
+// answer {"success":true} without the rule ever reaching /etc/exports, and it
+// never repairs itself afterwards -- confirmed with the DSM team on 2026-08-17,
+// and reproduced outside Kubernetes at roughly a third of concurrent saves. The
+// files it writes (/etc/exports, exports_syno, exports_map) were each left
+// incomplete in different combinations, so there is no single one to check.
+//
+// A save that silently did nothing leaves the share unexported, and the client
+// gets "No such file or directory" from the mount -- so a pod sits in
+// ContainerCreating until it times out. Reading the rules back is the only way
+// to find out, because the save itself claims to have worked.
+// A var rather than a const so tests can shorten it; nothing else reassigns it.
+var nfsPrivilegeVerifyTimeout = 30 * time.Second
+
+// ShareNfsPrivilegeSave writes a share's NFS export rules and confirms they
+// took effect, retrying the whole write when they did not.
 func (dsm *DSM) ShareNfsPrivilegeSave(privilege SharePrivilege) error {
+	attempts := 0
+	return backoff.Retry(func() error {
+		attempts++
+		if err := dsm.shareNfsPrivilegeSaveOnce(privilege); err != nil {
+			// nfsPrivilegeRequest has already retried what is worth retrying at
+			// the request level; anything left is the caller's problem.
+			return backoff.Permanent(err)
+		}
+
+		got, err := dsm.ShareNfsPrivilegeLoad(privilege.ShareName)
+		if err != nil {
+			// We cannot tell whether the save landed. Try again rather than
+			// report a success we have not seen.
+			log.Infof("DSM[%s] couldn't read back the NFS privilege of share(%s) to confirm the save: %v",
+				dsm.Ip, privilege.ShareName, err)
+			return err
+		}
+
+		if missing := missingPrivilegeRules(got, privilege); len(missing) > 0 {
+			log.Warnf("DSM[%s] reported success saving the NFS privilege of share(%s) but rules for %v are not in effect (attempt %d), retrying",
+				dsm.Ip, privilege.ShareName, missing, attempts)
+			return fmt.Errorf("DSM[%s] did not apply the NFS export rules of share(%s) for %v",
+				dsm.Ip, privilege.ShareName, missing)
+		}
+
+		if attempts > 1 {
+			log.Infof("DSM[%s] NFS privilege of share(%s) took effect after %d attempts",
+				dsm.Ip, privilege.ShareName, attempts)
+		}
+		return nil
+	}, busyBackOff(nfsPrivilegeVerifyTimeout))
+}
+
+func (dsm *DSM) shareNfsPrivilegeSaveOnce(privilege SharePrivilege) error {
 	params := url.Values{}
 	params.Add("api", "SYNO.Core.FileServ.NFS.SharePrivilege")
 	params.Add("method", "save")
@@ -413,12 +542,34 @@ func (dsm *DSM) ShareNfsPrivilegeSave(privilege SharePrivilege) error {
 	}
 	params.Add("rule", string(js))
 
-	_, err = dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
+	_, err = dsm.nfsPrivilegeRequest(&struct{}{}, params, nfsPrivilegeRetryTimeout)
 	if err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// missingPrivilegeRules returns the clients we asked to allow that DSM does not
+// actually have rules for.
+//
+// It compares client and privilege only. DSM normalises the remaining fields,
+// and what decides whether the mount works is that the client appears with the
+// access we asked for. Requesting no rules -- which the driver never does, but
+// which is how the rules would be cleared -- leaves nothing to confirm.
+func missingPrivilegeRules(got, want SharePrivilege) []string {
+	inEffect := make(map[string]string, len(got.Rule))
+	for _, rule := range got.Rule {
+		inEffect[rule.Client] = rule.Privilege
+	}
+
+	var missing []string
+	for _, rule := range want.Rule {
+		if inEffect[rule.Client] != rule.Privilege {
+			missing = append(missing, rule.Client)
+		}
+	}
+	return missing
 }
 
 func (dsm *DSM) ShareNfsPrivilegeLoad(shareName string) (SharePrivilege, error) {
@@ -429,7 +580,7 @@ func (dsm *DSM) ShareNfsPrivilegeLoad(shareName string) (SharePrivilege, error) 
 	params.Add("version", "1")
 
 	info := SharePrivilege{}
-	_, err := dsm.sendRequest("", &info, params, "webapi/entry.cgi")
+	_, err := dsm.nfsPrivilegeRequest(&info, params, nfsPrivilegeRetryTimeout)
 	if err != nil {
 		return SharePrivilege{}, err
 	}
@@ -444,6 +595,7 @@ func (dsm *DSM) NfsGet() (NfsInfo, error) {
 	params.Add("version", "2")
 
 	info := NfsInfo{}
+	// SYNO.Core.FileServ.NFS namespace: share error codes do not apply.
 	_, err := dsm.sendRequest("", &info, params, "webapi/entry.cgi")
 	if err != nil {
 		return NfsInfo{}, err
@@ -462,6 +614,7 @@ func (dsm *DSM) NfsSet(enableV3 bool, enableV4 bool, enabledMinorVer int) error 
 	params.Add("enable_nfs_v4", strconv.FormatBool(enableV4))
 	params.Add("enabled_minor_ver", strconv.Itoa(enabledMinorVer))
 
+	// SYNO.Core.FileServ.NFS namespace: share error codes do not apply.
 	_, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
 	if err != nil {
 		return err
