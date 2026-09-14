@@ -91,7 +91,7 @@ spec:
             # privileged alone does not change the runtime user.
             runAsUser: 0
           imagePullPolicy: IfNotPresent
-          image: synology/synology-csi:v1.3.1
+          image: synology/synology-csi:v1.4.0
           args:
             - --nodeid=$(KUBE_NODE_NAME)
             - --endpoint=$(CSI_ENDPOINT)
