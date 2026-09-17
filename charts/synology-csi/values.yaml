@@ -1,0 +1,80 @@
+# -- imagePullSecrets
+imagePullSecrets: []
+# -- name override
+nameOverride: ""
+# -- full name override
+fullnameOverride: ""
+
+# -- controller configuration
+controller:
+  csi-provisioner:
+    image:
+      repository: k8s.gcr.io/sig-storage/csi-provisioner
+      pullPolicy: IfNotPresent
+      tag: "v3.0.0"
+  csi-attacher:
+    image:
+      repository: k8s.gcr.io/sig-storage/csi-attacher
+      pullPolicy: IfNotPresent
+      tag: "v3.3.0"
+  csi-resizer:
+    image:
+      repository: k8s.gcr.io/sig-storage/csi-resizer
+      pullPolicy: IfNotPresent
+      tag: "v1.3.0"
+  csi-plugin:
+    image:
+      repository: synology/synology-csi
+      pullPolicy: IfNotPresent
+      tag: ""
+# -- node configuration    
+node:
+  tolerations:
+    - operator: Exists
+  csi-driver-registrar:
+    image:
+      repository: k8s.gcr.io/sig-storage/csi-node-driver-registrar
+      pullPolicy: IfNotPresent
+      tag: "v2.3.0" 
+  csi-plugin:
+    image:
+      repository: synology/synology-csi
+      pullPolicy: IfNotPresent
+      tag: "" 
+# -- snapshotter configuration
+snapshotter:
+# -- enables snapshotter. Disabled by default
+  enabled: false
+  csi-snapshotter:
+    image:
+      repository: k8s.gcr.io/sig-storage/csi-snapshotter
+      pullPolicy: IfNotPresent
+      tag: "v4.2.1"   
+  csi-plugin:
+    image:
+      repository: synology/synology-csi
+      pullPolicy: IfNotPresent
+      tag: "" 
+
+# -- name of the secret containing clientInfo. User should be in administrators group with access do DSM. 
+clientInfoSecretName: ""
+
+# -- list of storageClass definitions
+storageClasses: []
+# - name: synology-csi
+#   isDefault: false
+#   reclaimPolicy: Retain
+#   parameters:
+#     dsm: '1.1.1.1'
+#     localtion: '/volume1'
+#     fsType: 'ext4'
+
+# -- list of colume snapshopt classes
+volumeSnapshotClasses: []
+  # - name: example
+  #   isDefault: false
+  #   deletionPolicy: Delete
+  #   parameters:
+  #     desciption: "example snapshot class"
+  #     is_locked: 'false'
+
