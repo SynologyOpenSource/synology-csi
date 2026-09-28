@@ -17,10 +17,10 @@ func (dsm *DSM) IsUC() bool {
 
 func (dsm *DSM) GetAnotherController() (*DSM, error) {
 	anotherDsm := &DSM{
-		Port:     dsm.Port,
-		Username: dsm.Username,
-		Password: dsm.Password,
-		Https:    dsm.Https,
+		Port:               dsm.Port,
+		Username:           dsm.Username,
+		Password:           dsm.Password,
+		Https:              dsm.Https,
 		TLSCACert:          dsm.TLSCACert,
 		TLSServerName:      dsm.TLSServerName,
 		InsecureSkipVerify: dsm.InsecureSkipVerify,
@@ -68,7 +68,7 @@ func (dsm *DSM) GetAnotherController() (*DSM, error) {
 				continue
 			}
 
-			if netIf.Status == "connected" && CheckIpReachable(netIf.Ip, anotherDsm.Port){
+			if netIf.Status == "connected" && CheckIpReachable(netIf.Ip, anotherDsm.Port) {
 				anotherDsm.Ip = netIf.Ip
 				return anotherDsm, nil
 			}

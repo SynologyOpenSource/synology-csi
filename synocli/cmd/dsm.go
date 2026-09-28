@@ -5,10 +5,10 @@ package cmd
 
 import (
 	"fmt"
-	"os"
-	"github.com/spf13/cobra"
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/common"
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/webapi"
+	"github.com/spf13/cobra"
+	"os"
 )
 
 var https = false
@@ -50,11 +50,11 @@ var cmdDsmLogin = &cobra.Command{
 		}
 
 		dsmApi := &webapi.DSM{
-			Ip:       args[0],
-			Username: args[1],
-			Password: args[2],
-			Port:     defaultPort,
-			Https:    https,
+			Ip:                 args[0],
+			Username:           args[1],
+			Password:           args[2],
+			Port:               defaultPort,
+			Https:              https,
 			TLSCACert:          tlsCACert,
 			TLSServerName:      tlsServerName,
 			InsecureSkipVerify: insecureSkipVerify,
@@ -123,11 +123,11 @@ func ListDsms(id int) ([]*webapi.DSM, error) {
 		}
 
 		dsm := &webapi.DSM{
-			Ip:       info.Clients[i].Host,
-			Port:     info.Clients[i].Port,
-			Username: info.Clients[i].Username,
-			Password: info.Clients[i].Password,
-			Https:    info.Clients[i].Https,
+			Ip:                 info.Clients[i].Host,
+			Port:               info.Clients[i].Port,
+			Username:           info.Clients[i].Username,
+			Password:           info.Clients[i].Password,
+			Https:              info.Clients[i].Https,
 			TLSCACert:          info.Clients[i].TLSCACert,
 			TLSServerName:      info.Clients[i].TLSServerName,
 			InsecureSkipVerify: info.Clients[i].InsecureSkipVerify,

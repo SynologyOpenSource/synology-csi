@@ -10,31 +10,31 @@ import (
 	"strconv"
 	"time"
 
-	log "github.com/sirupsen/logrus"
-	"github.com/SynologyOpenSource/synology-csi/pkg/utils"
 	"github.com/SynologyOpenSource/synology-csi/pkg/logger"
+	"github.com/SynologyOpenSource/synology-csi/pkg/utils"
 	"github.com/cenkalti/backoff/v4"
+	log "github.com/sirupsen/logrus"
 )
 
 type ShareInfo struct {
-	Name                string `json:"name"`                        // required
-	VolPath             string `json:"vol_path"`                    // required
+	Name                string `json:"name"`     // required
+	VolPath             string `json:"vol_path"` // required
 	Desc                string `json:"desc"`
-	EnableShareCow      bool   `json:"enable_share_cow"`            // field for create
+	EnableShareCow      bool   `json:"enable_share_cow"` // field for create
 	EnableRecycleBin    bool   `json:"enable_recycle_bin"`
 	RecycleBinAdminOnly bool   `json:"recycle_bin_admin_only"`
-	Encryption          int    `json:"encryption"`                  // field for create
+	Encryption          int    `json:"encryption"` // field for create
 	QuotaForCreate      *int64 `json:"share_quota,omitempty"`
-	QuotaValueInMB      int64  `json:"quota_value"`                 // field for get
-	SupportSnapshot     bool   `json:"support_snapshot"`            // field for get
-	Uuid                string `json:"uuid"`                        // field for get
-	NameOrg             string `json:"name_org"`                    // required for clone
+	QuotaValueInMB      int64  `json:"quota_value"`      // field for get
+	SupportSnapshot     bool   `json:"support_snapshot"` // field for get
+	Uuid                string `json:"uuid"`             // field for get
+	NameOrg             string `json:"name_org"`         // required for clone
 }
 
 type ShareUpdateInfo struct {
-	Name                string `json:"name"`                        // required
-	VolPath             string `json:"vol_path"`                    // required
-	QuotaForCreate      *int64 `json:"share_quota,omitempty"`
+	Name           string `json:"name"`     // required
+	VolPath        string `json:"vol_path"` // required
+	QuotaForCreate *int64 `json:"share_quota,omitempty"`
 	// Add properties you want to update to shares here
 }
 
@@ -66,7 +66,7 @@ type ShareSnapshotCreateSpec struct {
 
 type SharePermissionSetSpec struct {
 	Name          string
-	UserGroupType string            // "local_user"/"local_group"/"system"
+	UserGroupType string // "local_user"/"local_group"/"system"
 	Permissions   []*SharePermission
 }
 
@@ -182,7 +182,7 @@ func shareErrCodeMapping(errCode int, oriErr error) error {
 	}
 
 	if errCode >= 3300 {
-		return utils.ShareDefaultError{errCode}
+		return utils.ShareDefaultError{ErrCode: errCode}
 	}
 	return oriErr
 }
@@ -622,4 +622,3 @@ func (dsm *DSM) NfsSet(enableV3 bool, enableV4 bool, enabledMinorVer int) error 
 
 	return nil
 }
-

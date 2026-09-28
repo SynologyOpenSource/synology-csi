@@ -9,23 +9,23 @@ import (
 )
 
 type DsmSysInfo struct {
-	Model         string `json:"model"`
-	FirmwareVer   string `json:"firmware_ver"`
-	Serial        string `json:"serial"`
+	Model       string `json:"model"`
+	FirmwareVer string `json:"firmware_ver"`
+	Serial      string `json:"serial"`
 	// type: network
-	Hostname      string `json:"hostname"`
+	Hostname string `json:"hostname"`
 	// type: define
 	SupportNvmeof string `json:"support_nvmeof"`
 }
 
 type NetworkInterface struct {
-	Ifname     string `json:"ifname"`
-	Ip         string `json:"ip"`
-	Mask       string `json:"mask"`
-	Speed      int    `json:"speed"`
-	Status     string `json:"status"`
-	Type       string `json:"type"`
-	UseDhcp    bool   `json:"use_dhcp"`
+	Ifname  string `json:"ifname"`
+	Ip      string `json:"ip"`
+	Mask    string `json:"mask"`
+	Speed   int    `json:"speed"`
+	Status  string `json:"status"`
+	Type    string `json:"type"`
+	UseDhcp bool   `json:"use_dhcp"`
 }
 
 func (dsm *DSM) FillSystemInfo() error {
@@ -71,7 +71,6 @@ func (dsm *DSM) DsmSystemInfoGet(infoType string) (*DsmSysInfo, error) {
 
 	return dsmInfo, nil
 }
-
 
 func (dsm *DSM) NetworkInterfaceList(relayNode string) ([]NetworkInterface, error) {
 	params := url.Values{}

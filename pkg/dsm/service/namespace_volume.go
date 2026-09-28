@@ -46,7 +46,7 @@ func (service *DsmService) createMappingSubsystem(dsm *webapi.DSM, spec *models.
 
 	if err != nil {
 		if !errors.Is(err, utils.AlreadyExistError("")) {
-			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to create subsystem with spec: %v, err: %v", subsystemSpec, err))
+			return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to create subsystem with spec: %v, err: %v", subsystemSpec, err))
 		}
 		// Left by an earlier attempt, so not ours to remove.
 	} else {
@@ -56,11 +56,11 @@ func (service *DsmService) createMappingSubsystem(dsm *webapi.DSM, spec *models.
 
 	subsystemInfo, err := dsm.SubsystemGet(subsystemUuid)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to get subsystem with spec: %v, err: %v", subsystemSpec, err))
+		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to get subsystem with spec: %v, err: %v", subsystemSpec, err))
 	}
 
 	if err := dsm.SubsystemSetNamespaces(subsystemUuid, []string{namespaceUuid}); err != nil {
-		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to map namespace [%s] to subsystem [%s], err: %v", spec.BackendName, subsystemInfo.Name, err))
+		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to map namespace [%s] to subsystem [%s], err: %v", spec.BackendName, subsystemInfo.Name, err))
 	}
 
 	return subsystemInfo, nil
@@ -90,7 +90,7 @@ func (service *DsmService) createNVMeVolumeBySnapshot(dsm *webapi.DSM, spec *mod
 	if _, err := dsm.NamespaceSnapshotClone(snapshotCloneSpec); err != nil {
 		if !errors.Is(err, utils.AlreadyExistError("")) {
 			return nil,
-				status.Errorf(codes.Internal, fmt.Sprintf("Failed to create volume with source snapshot ID: %s, err: %v", srcSnapshot.Uuid, err))
+				status.Error(codes.Internal, fmt.Sprintf("Failed to create volume with source snapshot ID: %s, err: %v", srcSnapshot.Uuid, err))
 		}
 	} else {
 		backendName := spec.BackendName
@@ -104,13 +104,13 @@ func (service *DsmService) createNVMeVolumeBySnapshot(dsm *webapi.DSM, spec *mod
 	}
 
 	if err := waitCloneFinished(dsm, spec.BackendName, spec.Protocol); err != nil {
-		return nil, status.Errorf(codes.Internal, err.Error())
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	namespaceInfo, err := dsm.NamespaceGet(spec.BackendName)
 	if err != nil {
 		return nil,
-			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get existed nvme namespace with name: %s, err: %v", spec.BackendName, err))
+			status.Error(codes.Internal, fmt.Sprintf("Failed to get existed nvme namespace with name: %s, err: %v", spec.BackendName, err))
 	}
 
 	// A clone comes back the size of its source; grow it if the PVC asked for
@@ -128,7 +128,7 @@ func (service *DsmService) createNVMeVolumeBySnapshot(dsm *webapi.DSM, spec *mod
 	subsystemInfo, err := service.createMappingSubsystem(dsm, spec, namespaceInfo.Uuid)
 	if err != nil {
 		return nil,
-			status.Errorf(codes.Internal, fmt.Sprintf("Failed to create and map subsystem, err: %v", err))
+			status.Error(codes.Internal, fmt.Sprintf("Failed to create and map subsystem, err: %v", err))
 	}
 	namespaceInfo.SubsystemUuid = subsystemInfo.Uuid
 
@@ -158,15 +158,15 @@ func (service *DsmService) createNVMeVolumeByVolume(dsm *webapi.DSM, spec *model
 	}
 
 	namespaceCloneSpec := webapi.NamespaceCloneSpec{
-		Name:         spec.BackendName,
-		SrcUuid:      srcNamespaceInfo.Uuid,
-		Location:     spec.Location,
+		Name:     spec.BackendName,
+		SrcUuid:  srcNamespaceInfo.Uuid,
+		Location: spec.Location,
 	}
 
 	if _, err := dsm.NamespaceClone(namespaceCloneSpec); err != nil {
 		if !errors.Is(err, utils.AlreadyExistError("")) {
 			return nil,
-				status.Errorf(codes.Internal, fmt.Sprintf("Failed to create volume with source volume ID: %s, err: %v", srcNamespaceInfo.Uuid, err))
+				status.Error(codes.Internal, fmt.Sprintf("Failed to create volume with source volume ID: %s, err: %v", srcNamespaceInfo.Uuid, err))
 		}
 	} else {
 		backendName := spec.BackendName
@@ -180,13 +180,13 @@ func (service *DsmService) createNVMeVolumeByVolume(dsm *webapi.DSM, spec *model
 	}
 
 	if err := waitCloneFinished(dsm, spec.BackendName, spec.Protocol); err != nil {
-		return nil, status.Errorf(codes.Internal, err.Error())
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	namespaceInfo, err := dsm.NamespaceGet(spec.BackendName)
 	if err != nil {
 		return nil,
-			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get existed nvme namespace with name: [%s], err: %v", spec.BackendName, err))
+			status.Error(codes.Internal, fmt.Sprintf("Failed to get existed nvme namespace with name: [%s], err: %v", spec.BackendName, err))
 	}
 
 	// A clone comes back the size of its source; grow it if the PVC asked for
@@ -204,7 +204,7 @@ func (service *DsmService) createNVMeVolumeByVolume(dsm *webapi.DSM, spec *model
 	subsystemInfo, err := service.createMappingSubsystem(dsm, spec, namespaceInfo.Uuid)
 	if err != nil {
 		return nil,
-			status.Errorf(codes.Internal, fmt.Sprintf("Failed to create and map subsystem, err: %v", err))
+			status.Error(codes.Internal, fmt.Sprintf("Failed to create and map subsystem, err: %v", err))
 	}
 	namespaceInfo.SubsystemUuid = subsystemInfo.Uuid
 
@@ -226,7 +226,7 @@ func (service *DsmService) createNVMeVolumeByDsm(dsm *webapi.DSM, spec *models.C
 		vol, err := service.getFirstAvailableVolume(dsm, spec.Size, spec.Protocol)
 		if err != nil {
 			return nil,
-				status.Errorf(codes.Internal, fmt.Sprintf("Failed to get available location, err: %v", err))
+				status.Error(codes.Internal, fmt.Sprintf("Failed to get available location, err: %v", err))
 		}
 		spec.Location = vol.Path
 	}
@@ -235,7 +235,7 @@ func (service *DsmService) createNVMeVolumeByDsm(dsm *webapi.DSM, spec *models.C
 	_, err := dsm.VolumeGet(spec.Location)
 	if err != nil {
 		return nil,
-			status.Errorf(codes.InvalidArgument, fmt.Sprintf("Unable to find location %s", spec.Location))
+			status.Error(codes.InvalidArgument, fmt.Sprintf("Unable to find location %s", spec.Location))
 	}
 
 	// 3. Create Namespace
@@ -252,7 +252,7 @@ func (service *DsmService) createNVMeVolumeByDsm(dsm *webapi.DSM, spec *models.C
 	_, err = dsm.NamespaceCreate(namespaceSpec)
 	if err != nil {
 		if !errors.Is(err, utils.AlreadyExistError("")) {
-			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to create namespace, err: %v", err))
+			return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to create namespace, err: %v", err))
 		}
 	} else {
 		backendName := spec.BackendName
@@ -268,14 +268,14 @@ func (service *DsmService) createNVMeVolumeByDsm(dsm *webapi.DSM, spec *models.C
 	namespaceInfo, err := dsm.NamespaceGet(spec.BackendName)
 	if err != nil {
 		return nil,
-			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get existed nvme namespace with name: %s, err: %v", spec.BackendName, err))
+			status.Error(codes.Internal, fmt.Sprintf("Failed to get existed nvme namespace with name: %s, err: %v", spec.BackendName, err))
 	}
 
 	// 4. Create Subsystem and Map to Namespace
 	subsystemInfo, err := service.createMappingSubsystem(dsm, spec, namespaceInfo.Uuid)
 	if err != nil {
 		return nil,
-			status.Errorf(codes.Internal, fmt.Sprintf("Failed to create and map subsystem, err: %v", err))
+			status.Error(codes.Internal, fmt.Sprintf("Failed to create and map subsystem, err: %v", err))
 	}
 	namespaceInfo.SubsystemUuid = subsystemInfo.Uuid
 

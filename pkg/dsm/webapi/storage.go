@@ -4,8 +4,8 @@ package webapi
 
 import (
 	"fmt"
-	"strconv"
 	"net/url"
+	"strconv"
 )
 
 type VolInfo struct {
@@ -64,4 +64,3 @@ func (dsm *DSM) VolumeGet(name string) (VolInfo, error) {
 
 	return info.Volume, nil
 }
-

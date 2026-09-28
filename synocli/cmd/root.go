@@ -9,7 +9,7 @@ import (
 
 var (
 	ConfigFile = "./config/client-info.yml"
-	DsmId = -1
+	DsmId      = -1
 )
 
 var rootCmd = &cobra.Command{

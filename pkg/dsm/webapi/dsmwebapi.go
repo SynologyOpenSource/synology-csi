@@ -19,13 +19,13 @@ import (
 )
 
 type DSM struct {
-	Ip         string
-	Port       int
-	Username   string
-	Password   string
-	Sid        string
-	Https      bool
-	Controller string
+	Ip                 string
+	Port               int
+	Username           string
+	Password           string
+	Sid                string
+	Https              bool
+	Controller         string
 	TLSCACert          string
 	TLSServerName      string
 	InsecureSkipVerify bool

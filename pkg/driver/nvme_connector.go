@@ -11,15 +11,15 @@ import (
 	"regexp"
 	"strings"
 
-	utilexec "k8s.io/utils/exec"
 	log "github.com/sirupsen/logrus"
+	utilexec "k8s.io/utils/exec"
 )
 
 // Namespace represents a single NVMe namespace device visible to the node.
 type Namespace struct {
-	DevPath    string // e.g. /dev/nvme1n1
-	Subsystem  string // e.g. nqn.2014-08.org.nvmexpress:uuid:...
-	Uuid       string
+	DevPath   string // e.g. /dev/nvme1n1
+	Subsystem string // e.g. nqn.2014-08.org.nvmexpress:uuid:...
+	Uuid      string
 }
 
 var (
@@ -30,7 +30,7 @@ var (
 const (
 	NVME_SUBSYSTEM_PATH = "/sys/class/nvme-subsystem"
 	NVME_FABRICS_PATH   = "/sys/class/nvme-fabrics/ctl"
-	NVMePort = 4420
+	NVMePort            = 4420
 )
 
 func (t *tools) nvme(cmdArgs ...string) utilexec.Cmd {

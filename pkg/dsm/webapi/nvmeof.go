@@ -25,16 +25,16 @@ type NamespaceInfo struct {
 }
 
 type SubsystemInfo struct {
-	Uuid        string   `json:"uuid"`
-	Name        string   `json:"name"`
-	Nqn         string   `json:"nqn"`
-	Status      string   `json:"status"`
-	Ports       []string `json:"ports"`
+	Uuid   string   `json:"uuid"`
+	Name   string   `json:"name"`
+	Nqn    string   `json:"nqn"`
+	Status string   `json:"status"`
+	Ports  []string `json:"ports"`
 }
 
 type SubsystemCreateSpec struct {
-	Name   string
-	Nqn    string
+	Name string
+	Nqn  string
 }
 
 type NamespaceCreateSpec struct {
@@ -52,9 +52,9 @@ type NamespaceSetSpec struct {
 }
 
 type NamespaceCloneSpec struct {
-	Name            string
-	SrcUuid         string
-	Location        string
+	Name     string
+	SrcUuid  string
+	Location string
 }
 
 func sanErrCodeMapping(errCode int, oriErr error) error {
@@ -76,7 +76,7 @@ func sanErrCodeMapping(errCode int, oriErr error) error {
 	}
 
 	if errCode >= 28990000 {
-		return utils.SanDefaultError{errCode}
+		return utils.SanDefaultError{ErrCode: errCode}
 	}
 	return oriErr
 }
