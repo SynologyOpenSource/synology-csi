@@ -5,6 +5,7 @@ package driver
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -142,4 +143,24 @@ func TestChmodIfPermissionMismatch(t *testing.T) {
 			t.Error("expected an error for a path that does not exist")
 		}
 	})
+}
+
+func TestParseNFSClientAllowlist(t *testing.T) {
+	cases := []struct {
+		name      string
+		allowlist string
+		want      []string
+	}{
+		{name: "unset", allowlist: "", want: nil},
+		{name: "only separators", allowlist: " , ,", want: nil},
+		{name: "wildcard", allowlist: "*", want: []string{"*"}},
+		{name: "list is trimmed and blanks dropped", allowlist: " 10.0.0.0/8, ,192.168.1.10 ", want: []string{"10.0.0.0/8", "192.168.1.10"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := parseNFSClientAllowlist(c.allowlist); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("got %v, want %v", got, c.want)
+			}
+		})
+	}
 }

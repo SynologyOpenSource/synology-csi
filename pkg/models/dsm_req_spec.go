@@ -67,12 +67,13 @@ type CreateK8sVolumeSnapshotSpec struct {
 }
 
 type NodeStageVolumeSpec struct {
-	VolumeId          string
-	StagingTargetPath string
-	VolumeCapability  *csi.VolumeCapability
-	Dsm               string
-	Source            string
-	FormatOptions     string
+	VolumeId           string
+	StagingTargetPath  string
+	VolumeCapability   *csi.VolumeCapability
+	Dsm                string
+	Source             string
+	FormatOptions      string
+	NfsClientAllowlist string
 }
 
 type ByVolumeId []*K8sVolumeRespSpec

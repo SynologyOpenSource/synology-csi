@@ -427,6 +427,27 @@ func getNodeAddress(ctx context.Context, client clientset.Interface) ([]string, 
 	return ips, nil
 }
 
+// parseNFSClientAllowlist splits the StorageClass's comma-separated
+// nfsClientAllowlist, dropping blank entries.
+func parseNFSClientAllowlist(allowlist string) []string {
+	var clients []string
+	for _, c := range strings.Split(allowlist, ",") {
+		if c = strings.TrimSpace(c); c != "" {
+			clients = append(clients, c)
+		}
+	}
+	return clients
+}
+
+// getNFSClients returns the clients for a share's NFS privilege rule: the
+// nfsClientAllowlist when set, otherwise every node's InternalIP.
+func getNFSClients(ctx context.Context, client clientset.Interface, allowlist string) ([]string, error) {
+	if clients := parseNFSClientAllowlist(allowlist); len(clients) > 0 {
+		return clients, nil
+	}
+	return getNodeAddress(ctx, client)
+}
+
 // force skips the rules-already-present shortcut. DSM regenerates the NFS
 // export table as a side effect of saving, and a mount that fails with "No
 // such file or directory" means this share's export entry is gone even though
@@ -689,12 +710,12 @@ func (ns *nodeServer) nodeStageNFSVolume(ctx context.Context, spec *models.NodeS
 		return nil, status.Error(codes.InvalidArgument, "NFS protocol only allows 'mount' access type")
 	}
 
-	nodeIps, err := getNodeAddress(ctx, ns.Client)
+	clients, err := getNFSClients(ctx, ns.Client, spec.NfsClientAllowlist)
 	if err != nil {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to get node IPs for NFS privilege setting, err: %v", err))
 	}
 
-	if err := ns.setNFSVolumePrivilege(spec.Source, nodeIps, utils.AuthTypeReadWrite, false); err != nil {
+	if err := ns.setNFSVolumePrivilege(spec.Source, clients, utils.AuthTypeReadWrite, false); err != nil {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to set NFS privilege rule, source: %s, err: %v", spec.Source, err))
 	}
 	return &csi.NodeStageVolumeResponse{}, nil
@@ -757,12 +778,13 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	}
 
 	spec := &models.NodeStageVolumeSpec{
-		VolumeId:          volumeId,
-		StagingTargetPath: stagingTargetPath,
-		VolumeCapability:  volumeCapability,
-		Dsm:               req.VolumeContext["dsm"],
-		Source:            req.VolumeContext["source"], // filled by CreateVolume response
-		FormatOptions:     req.VolumeContext["formatOptions"],
+		VolumeId:           volumeId,
+		StagingTargetPath:  stagingTargetPath,
+		VolumeCapability:   volumeCapability,
+		Dsm:                req.VolumeContext["dsm"],
+		Source:             req.VolumeContext["source"], // filled by CreateVolume response
+		FormatOptions:      req.VolumeContext["formatOptions"],
+		NfsClientAllowlist: req.VolumeContext["nfsClientAllowlist"],
 	}
 
 	switch req.VolumeContext["protocol"] {
@@ -885,10 +907,10 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 			// regeneration, then try once more.
 			log.Warnf("NFS server has no export for %s although the share should have one; "+
 				"re-saving its privilege to regenerate the export table and retrying the mount", source)
-			if nodeIps, ipErr := getNodeAddress(ctx, ns.Client); ipErr != nil {
+			if clients, ipErr := getNFSClients(ctx, ns.Client, req.VolumeContext["nfsClientAllowlist"]); ipErr != nil {
 				log.Errorf("Failed to get node IPs to restore the export of %s: %v", source, ipErr)
 			} else if saveErr := ns.setNFSVolumePrivilege(
-				"//"+server+"/"+path.Base(baseDir), nodeIps, utils.AuthTypeReadWrite, true); saveErr != nil {
+				"//"+server+"/"+path.Base(baseDir), clients, utils.AuthTypeReadWrite, true); saveErr != nil {
 				log.Errorf("Failed to re-save the NFS privilege of %s: %v", source, saveErr)
 			} else {
 				err = ns.Mounter.Mount(source, targetPath, "nfs", options)
