@@ -34,6 +34,10 @@ bin/synology-csi-driver: bin FORCE
 docker-build:
 	docker build -f Dockerfile -t $(IMAGE_TAG) .
 
+.PHONY: docker-build-community
+docker-build-community:
+	docker build -f Dockerfile.community -t $(REGISTRY_NAME)/$(IMAGE_NAME):$(IMAGE_VERSION)-community .
+
 .PHONY: docker-build-multiarch
 docker-build-multiarch:
 	docker buildx build -t $(IMAGE_TAG) --platform linux/amd64,linux/arm/v7,linux/arm64 . --push

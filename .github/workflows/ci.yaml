@@ -6,14 +6,18 @@ on:
       - 'go.*'
       - '**/*.go'
       - 'Dockerfile'
+      - 'Dockerfile.community'
       - 'Makefile'
+      - 'README.md'
   pull_request:
     paths:
       - '.github/workflows/ci.yaml'
       - 'go.*'
       - '**/*.go'
       - 'Dockerfile'
+      - 'Dockerfile.community'
       - 'Makefile'
+      - 'README.md'
 
 jobs:
   build:
@@ -33,3 +37,16 @@ jobs:
 
       - name: Build binary
         run: make build
+
+  community-image:
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.1
+
+      - name: Build community image
+        run: make docker-build-community

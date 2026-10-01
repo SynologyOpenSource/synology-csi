@@ -268,8 +268,8 @@ If you want to use images you built locally for installation, edit all files und
 - To build the CSI driver, execute `make`.
 - To build the *synocli* dev tool, execute `make synocli`. The output binary will be at `bin/synocli`.
 - To run unit tests, execute `make test`.
-- To build a docker image, run `./scripts/deploy.sh build`.
- Afterwards, run `docker images` to check the newly created image.
+- To build the UBI image used for Red Hat/OpenShift certification, run `make docker-build` (or `./scripts/deploy.sh build`). This path uses the existing `Dockerfile` and requires access to the RHEL repositories used for its runtime packages.
+- To build an entitlement-free image for community and local use, run `make docker-build-community`. This path uses `Dockerfile.community` and tags the image `synology/synology-csi:v1.4.0-community`. It builds the same driver with public Ubuntu runtime packages and is not the Red Hat-certified image.
 
 ### Installation
 
