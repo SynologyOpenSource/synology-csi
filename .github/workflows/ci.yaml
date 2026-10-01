@@ -6,16 +6,20 @@ on:
       - 'go.*'
       - '**/*.go'
       - 'Dockerfile'
+      - 'Dockerfile.community'
       - 'Makefile'
       - 'deploy/helm/**'
+      - 'README.md'
   pull_request:
     paths:
       - '.github/workflows/ci.yaml'
       - 'go.*'
       - '**/*.go'
       - 'Dockerfile'
+      - 'Dockerfile.community'
       - 'Makefile'
       - 'deploy/helm/**'
+      - 'README.md'
 
 jobs:
   build:
@@ -52,3 +56,16 @@ jobs:
 
       - name: Lint Helm chart
         run: helm lint deploy/helm
+
+  community-image:
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.1
+
+      - name: Build community image
+        run: make docker-build-community

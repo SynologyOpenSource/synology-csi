@@ -1,0 +1,65 @@
+# Copyright 2026 Synology Inc.
+
+############## Build stage ##############
+FROM golang:1.21.4-alpine AS builder
+LABEL stage=synobuilder-community
+
+RUN apk add --no-cache alpine-sdk
+WORKDIR /go/src/synok8scsiplugin
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY Makefile .
+
+ARG TARGETPLATFORM
+
+COPY main.go .
+COPY pkg ./pkg
+COPY synocli ./synocli
+RUN env GOARCH=$(echo "$TARGETPLATFORM" | cut -f2 -d/) \
+        GOARM=$(echo "$TARGETPLATFORM" | cut -f3 -d/ | cut -c2-) \
+        make
+
+############## Final stage ##############
+FROM ubuntu:24.04
+
+ARG IMAGE_VERSION=dev
+ARG IMAGE_RELEASE=1
+LABEL name="synology-csi" \
+      maintainer="Synology" \
+      vendor="Synology Inc." \
+      version="${IMAGE_VERSION}" \
+      release="${IMAGE_RELEASE}" \
+      summary="Synology CSI driver for Kubernetes" \
+      description="A Container Storage Interface (CSI) driver for Synology NAS."
+
+# Keep the UBI image's filesystem, mount, network, and NVMe runtime package
+# contract using public Ubuntu packages. Ubuntu coreutils provides the exact
+# /usr/sbin/chroot path used by hostexec for the privileged node plugin.
+# The shipped node manifests set --chroot-dir=/host, so iscsiadm and multipath
+# commands run from the host; filesystem formatting and mount helpers run here.
+# Retain nvme-cli to match the existing UBI runtime package set.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        cifs-utils \
+        coreutils \
+        e2fsprogs \
+        iproute2 \
+        nfs-common \
+        nvme-cli \
+        util-linux \
+        xfsprogs \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /
+
+# Copy and run CSI driver
+COPY --from=builder /go/src/synok8scsiplugin/bin/synology-csi-driver synology-csi-driver
+
+# Keep controller pods compatible with RunAsNonRoot certification. The node
+# DaemonSet overrides this with runAsUser: 0 because host operations need root.
+USER 1000
+
+ENTRYPOINT ["/synology-csi-driver"]
