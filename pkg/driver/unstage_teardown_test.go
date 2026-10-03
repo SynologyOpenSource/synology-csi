@@ -5,6 +5,8 @@ package driver
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -117,24 +119,19 @@ func TestLogoutSucceedsWhenTheRecordCannotBeRemoved(t *testing.T) {
 	}
 }
 
-func TestFlushWritesOutTheDeviceBeforeItGoesAway(t *testing.T) {
-	e := &recordingExecutor{}
-	tools := NewTools(e)
-
-	if err := tools.blockdev_flushbufs("/dev/sdx"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if e.find("blockdev --flushbufs /dev/sdx") < 0 {
-		t.Errorf("expected the device to be flushed, ran: %v", e.ran)
-	}
-}
-
 func TestFlushReportsFailure(t *testing.T) {
-	e := &recordingExecutor{fail: "flushbufs"}
-	tools := NewTools(e)
+	tools := NewTools(&recordingExecutor{})
 
-	if err := tools.blockdev_flushbufs("/dev/sdx"); err == nil {
-		t.Error("expected an error when the flush fails; silently continuing to logout " +
-			"is what loses the writes still held in memory")
+	// A regular file is not a block device, so the ioctl fails (ENOTTY).
+	notADevice := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(notADevice, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{notADevice, filepath.Join(t.TempDir(), "missing")} {
+		if err := tools.flushDeviceBuffers(path); err == nil {
+			t.Errorf("expected an error flushing %s; silently continuing to logout "+
+				"is what loses the writes still held in memory", path)
+		}
 	}
 }

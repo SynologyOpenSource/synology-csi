@@ -27,6 +27,7 @@ import (
 
 	"github.com/SynologyOpenSource/synology-csi/pkg/utils/hostexec"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sys/unix"
 	utilexec "k8s.io/utils/exec"
 )
 
@@ -179,8 +180,9 @@ func (t *tools) iscsiadm_delete_node(iqn string, portal string) error {
 	return nil
 }
 
-// blockdev_flushbufs writes out anything the kernel still holds for a block
-// device and drops its buffers.
+// flushDeviceBuffers writes out anything the kernel still holds for a block
+// device and drops its buffers. It issues the BLKFLSBUF ioctl directly, which
+// is all `blockdev --flushbufs` does, so the host needs no blockdev binary.
 //
 // Raw block volumes are written through the page cache with no filesystem to
 // flush them, so the data reaches the LUN only when the last opener closes it.
@@ -188,12 +190,13 @@ func (t *tools) iscsiadm_delete_node(iqn string, portal string) error {
 // leaves the write racing the next node's read. The in-tree iSCSI plugin does
 // the same thing on its detach path. It is a no-op on a device that is already
 // clean.
-func (t *tools) blockdev_flushbufs(devPath string) error {
-	cmd := t.executor.Command("blockdev", "--flushbufs", devPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%s (%v)", string(out), err)
+func (t *tools) flushDeviceBuffers(devPath string) error {
+	f, err := os.Open(devPath)
+	if err != nil {
+		return err
 	}
-	return nil
+	defer f.Close()
+	return unix.IoctlSetInt(int(f.Fd()), unix.BLKFLSBUF, 0)
 }
 
 func (t *tools) iscsiadm_rescan(iqn string) error {

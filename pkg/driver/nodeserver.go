@@ -334,7 +334,7 @@ func (ns *nodeServer) logoutTarget(k8sVolume *models.K8sVolumeRespSpec) {
 	} else if err := ns.tools.fsyncDevice(volumeMountPath); err != nil {
 		log.Errorf("Failed to fsync device %s before logout, its last writes may only exist in the DSM's memory: %v",
 			volumeMountPath, err)
-	} else if err := ns.tools.blockdev_flushbufs(volumeMountPath); err != nil {
+	} else if err := ns.tools.flushDeviceBuffers(volumeMountPath); err != nil {
 		log.Errorf("Failed to flush device %s before logout, its last writes may not have reached the LUN: %v",
 			volumeMountPath, err)
 	} else {
