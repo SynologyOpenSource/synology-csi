@@ -314,8 +314,13 @@ func (d *initiatorDriver) rescan(targetIqn string) error {
 // the backing file at 0 allocated blocks until this fsync, which brought it
 // to 2048. CSI unstage always precedes the snapshot and clone operations
 // Kubernetes tests do, so syncing here closes that window.
+//
+// The device is opened read-only: fsync needs no write access, and udev
+// watches disks for a close after writing, answering it with a change event
+// that re-probes the device. Right before logout, that probe races the session
+// teardown and fails with read errors on a device that is going away.
 func (t *tools) fsyncDevice(devPath string) error {
-	f, err := os.OpenFile(devPath, os.O_WRONLY, 0)
+	f, err := os.Open(devPath)
 	if err != nil {
 		return err
 	}
