@@ -117,6 +117,11 @@ spec:
               readOnly: true
             - name: host-root
               mountPath: /host
+              # HostToContainer so unmounts on the host reach the copies of
+              # kubelet mounts under /host. Without it, the pod keeps a private
+              # copy of every volume staged before it started, and unstaging such
+              # a volume logs out of the device while it is still mounted.
+              mountPropagation: HostToContainer
             - name: device-dir
               mountPath: /dev
       volumes:
