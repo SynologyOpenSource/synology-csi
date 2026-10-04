@@ -7,6 +7,7 @@ package main
 import (
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	log "github.com/sirupsen/logrus"
@@ -34,6 +35,8 @@ var (
 	multipathPath  = ""
 	multipathdPath = ""
 	nvmePath       = ""
+	// Unstage
+	unstageHolderTimeout = driver.UnstageHolderTimeout
 )
 
 var rootCmd = &cobra.Command{
@@ -87,6 +90,10 @@ func driverStart() error {
 		"multipathd": multipathdPath,
 		"nvme":       nvmePath,
 	}
+	driver.UnstageHolderTimeout = unstageHolderTimeout
+	if chrootDir != "" {
+		driver.HostProcPath = filepath.Join(chrootDir, "proc")
+	}
 	cmdExecutor, err := hostexec.New(cmdMap, chrootDir)
 	if err != nil {
 		log.Errorf("Failed to create command executor: %v", err)
@@ -133,6 +140,8 @@ func addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(&multipathPath, "multipath-path", multipathPath, "Full path of multipath executable")
 	cmd.PersistentFlags().StringVar(&multipathdPath, "multipathd-path", multipathdPath, "Full path of multipathd executable")
 	cmd.PersistentFlags().StringVar(&nvmePath, "nvme-path", nvmePath, "Full path of nvme executable")
+	cmd.PersistentFlags().DurationVar(&unstageHolderTimeout, "unstage-holder-timeout", unstageHolderTimeout,
+		"How long unstage waits for other mount namespaces to release a volume before syncing it and disconnecting anyway (0 waits forever)")
 
 	cmd.MarkFlagRequired("endpoint")
 	cmd.MarkFlagRequired("client-info")

@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -49,6 +50,11 @@ type nodeServer struct {
 	Initiator  *initiatorDriver
 	Client     clientset.Interface
 	tools      tools
+
+	// holderSince records when unstage first found a volume's device held by
+	// another mount namespace; see releaseDevice.
+	holderMutex sync.Mutex
+	holderSince map[string]time.Time
 }
 
 func waitForDevicePathToExist(path string) error {
@@ -260,14 +266,21 @@ func (ns *nodeServer) loginNVMeSubsystem(volumeId string) ([]string, error) {
 	return paths, nil
 }
 
-func (ns *nodeServer) logoutNVMeSubsystem(nqn string) {
+func (ns *nodeServer) logoutNVMeSubsystem(nqn string, volumeId string) error {
 	if nqn == "" {
-		return
+		return nil
+	}
+
+	if devPath := getExistedNvmeDevPath(nqn, volumeId); devPath != "" {
+		if err := ns.releaseDevice(devPath, volumeId); err != nil {
+			return err
+		}
 	}
 
 	if err := ns.tools.nvmeDisconnect(nqn); err != nil {
 		log.Errorf("Failed to disconnect NVMe subsystem [%s]: %v", nqn, err)
 	}
+	return nil
 }
 
 // loginTarget logs the node in to the volume's target and returns the by-path
@@ -309,14 +322,20 @@ func (ns *nodeServer) loginTarget(volumeId string) (paths []string, iqn string, 
 	return paths, iqn, lun, nil
 }
 
-func (ns *nodeServer) logoutTarget(k8sVolume *models.K8sVolumeRespSpec) {
+func (ns *nodeServer) logoutTarget(k8sVolume *models.K8sVolumeRespSpec) error {
 	if k8sVolume == nil {
-		return
+		return nil
 	}
 
 	// Assume target and lun 1-1 mapping
 	mappingIndex := k8sVolume.Target.MappedLuns[0].MappingIndex
 	volumeMountPath := ns.tools.getExistedVolumeMountPath(k8sVolume.Target.Iqn, mappingIndex)
+
+	if volumeMountPath != "" {
+		if err := ns.releaseDevice(volumeMountPath, k8sVolume.VolumeId); err != nil {
+			return err
+		}
+	}
 
 	// Push anything still in the page cache out to the LUN before the session
 	// goes away. A filesystem volume was already flushed by the Unmount above,
@@ -348,6 +367,7 @@ func (ns *nodeServer) logoutTarget(k8sVolume *models.K8sVolumeRespSpec) {
 	}
 
 	ns.Initiator.logout(k8sVolume.Target.Iqn, k8sVolume.DsmIp)
+	return nil
 }
 
 // XFS refuses to mount a filesystem whose UUID is already in use on the host.
@@ -809,10 +829,16 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 		return &csi.NodeUnstageVolumeResponse{}, nil
 	}
 
+	// Disconnecting a device that still has a filesystem mounted on it loses
+	// that filesystem's in-flight writes; let kubelet call again instead.
 	if k8sVolume.Protocol == utils.ProtocolIscsi {
-		ns.logoutTarget(k8sVolume)
+		if err := ns.logoutTarget(k8sVolume); err != nil {
+			return nil, status.Errorf(codes.Internal, "Not logging out of the target of volume[%s]: %v", volumeId, err)
+		}
 	} else if k8sVolume.Protocol == utils.ProtocolNvme {
-		ns.logoutNVMeSubsystem(k8sVolume.Subsystem.Nqn)
+		if err := ns.logoutNVMeSubsystem(k8sVolume.Subsystem.Nqn, volumeId); err != nil {
+			return nil, status.Errorf(codes.Internal, "Not disconnecting the NVMe subsystem of volume[%s]: %v", volumeId, err)
+		}
 	}
 
 	return &csi.NodeUnstageVolumeResponse{}, nil
