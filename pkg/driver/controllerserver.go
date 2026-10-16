@@ -19,10 +19,13 @@ package driver
 import (
 	"context"
 	"fmt"
+	"math"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	log "github.com/sirupsen/logrus"
 
@@ -42,9 +45,101 @@ type controllerServer struct {
 	Initiator  *initiatorDriver
 }
 
-func getSizeByCapacityRange(capRange *csi.CapacityRange) (int64, error) {
+// minVolumeSizeBytes is the DSM-side sane minimum for a LUN/namespace. Synology
+// DSM rejects very small volumes with obscure error codes, so the driver clamps
+// smaller requests up to this value rather than failing (issue #104).
+// Overridable per StorageClass via the "minVolumeSize" parameter (issue #78).
+const defaultMinVolumeSizeBytes = 1 * utils.UNIT_GB // 1 GiB
+
+// minVolumeSizeRe matches a size string like "500Mi", "1Gi", "1073741824" (plain bytes).
+// Supported suffixes: Ki, Mi, Gi, Ti (binary, powers of 1024).
+var minVolumeSizeRe = regexp.MustCompile(`^(\d+)(Ki|Mi|Gi|Ti)?$`)
+
+// mulNoOverflow returns a*b iff it fits in a non-negative int64; otherwise
+// (false, 0). Used to reject minVolumeSize inputs that would wrap around
+// silently when multiplied by their suffix multiplier.
+func mulNoOverflow(a, b int64) (ok bool, result int64) {
+	if a <= 0 || b <= 0 {
+		return false, 0
+	}
+	// a*b overflows iff a > MaxInt64/b (b > 0).
+	if a > math.MaxInt64/b {
+		return false, 0
+	}
+	return true, a * b
+}
+
+// parseMinVolumeSize parses a minVolumeSize StorageClass parameter. Supported formats:
+//   - Plain bytes: "1073741824"
+//   - Binary suffixes: "500Mi", "1Gi", "2Ti"
+//
+// Returns the size in bytes, or an error if the format is invalid or the result
+// would overflow int64 (e.g. "10000000000000000000Ti" — rejected with
+// InvalidArgument rather than silently wrapping).
+// An empty string returns the default 1 GiB (defaultMinVolumeSizeBytes).
+func parseMinVolumeSize(s string) (int64, error) {
+	if s == "" {
+		return defaultMinVolumeSizeBytes, nil
+	}
+
+	matches := minVolumeSizeRe.FindStringSubmatch(s)
+	if matches == nil {
+		return 0, fmt.Errorf("invalid minVolumeSize format %q: expected bytes or suffix (Ki, Mi, Gi, Ti)", s)
+	}
+
+	value, err := strconv.ParseInt(matches[1], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid numeric value in minVolumeSize %q: %v", s, err)
+	}
+	if value <= 0 {
+		return 0, fmt.Errorf("minVolumeSize must be positive, got %d", value)
+	}
+
+	suffix := matches[2]
+	var multiplier int64
+	switch suffix {
+	case "":
+		multiplier = 1
+	case "Ki":
+		multiplier = 1024
+	case "Mi":
+		multiplier = utils.UNIT_MB
+	case "Gi":
+		multiplier = utils.UNIT_GB
+	case "Ti":
+		// 1 TiB = 1024 * UNIT_GB; fold the factor in so we do one overflow
+		// check instead of a chained multiply.
+		multiplier = 1024 * utils.UNIT_GB
+	default:
+		return 0, fmt.Errorf("unsupported suffix %q in minVolumeSize", suffix)
+	}
+
+	ok, result := mulNoOverflow(value, multiplier)
+	if !ok {
+		return 0, fmt.Errorf("minVolumeSize %q overflows int64", s)
+	}
+	return result, nil
+}
+
+// getSizeByCapacityRange extracts the volume size from a CSI CapacityRange,
+// clamping requests below the supplied floor up to that floor instead of
+// rejecting them (a 10 MiB PVC is honored as a 1 GiB LUN — issue #104).
+//
+// Floor semantics (IMPORTANT — do not conflate the two call sites):
+//   - floor > 0: clamp to floor. Used by CreateVolume, where the floor is the
+//     StorageClass `minVolumeSize` parameter (parseMinVolumeSize already
+//     defaults an empty parameter to defaultMinVolumeSizeBytes = 1 GiB, so
+//     CreateVolume always passes a positive floor).
+//   - floor == 0: NO clamp. Used by ControllerExpandVolume and NodeExpandVolume
+//     — an expand request smaller than 1 GiB must NOT be silently inflated to
+//     1 GiB, because that would over-allocate on the DSM. Shrinks are already
+//     blocked DSM-side (dsm.go ~L965-969), so no floor is needed here either.
+//
+// If capRange is nil, floor is returned directly (0 for the expansion paths,
+// 1 GiB for CreateVolume via parseMinVolumeSize's default).
+func getSizeByCapacityRange(capRange *csi.CapacityRange, minVolumeSizeFloor int64) (int64, error) {
 	if capRange == nil {
-		return 1 * utils.UNIT_GB, nil
+		return minVolumeSizeFloor, nil
 	}
 
 	minSize := capRange.GetRequiredBytes()
@@ -52,8 +147,18 @@ func getSizeByCapacityRange(capRange *csi.CapacityRange) (int64, error) {
 	if 0 < maxSize && maxSize < minSize {
 		return 0, status.Error(codes.InvalidArgument, "Invalid input: limitBytes is smaller than requiredBytes")
 	}
-	if minSize < utils.UNIT_GB {
-		return 0, status.Error(codes.InvalidArgument, "Invalid input: required bytes is smaller than 1G")
+
+	// Clamp to the floor only when one is supplied. Expansion paths pass 0 to
+	// opt out of clamping — a 500 MiB expand on a 500 MiB SC must stay 500 MiB
+	// (or whatever the caller asked for), not be inflated to 1 GiB.
+	if minVolumeSizeFloor > 0 && minSize < minVolumeSizeFloor {
+		minSize = minVolumeSizeFloor
+	}
+
+	// Respect the user's upper bound: if they asked for < floor
+	// with a tight limit, the clamp would violate the limit.
+	if 0 < maxSize && maxSize < minSize {
+		return 0, status.Error(codes.InvalidArgument, "Invalid input: limitBytes is smaller than the DSM minimum")
 	}
 
 	return int64(minSize), nil
@@ -64,6 +169,22 @@ func getSizeByCapacityRange(capRange *csi.CapacityRange) (int64, error) {
 // iSCSI and NVMe-TCP support volumeMode: Block.
 func isShareProtocol(protocol string) bool {
 	return protocol == utils.ProtocolNfs || protocol == utils.ProtocolSmb
+}
+
+// sanitizeDescriptionNamespace makes a Kubernetes namespace safe for inclusion
+// in a Synology LUN/namespace description. DSM rejects descriptions that are
+// empty or digits-only (error 18990403); prefixing "ns-" guarantees at least
+// one non-digit character while keeping the value recognisable. (issue #134)
+func sanitizeDescriptionNamespace(ns string) string {
+	if ns == "" {
+		return "ns-"
+	}
+	for _, r := range ns {
+		if !unicode.IsDigit(r) {
+			return ns
+		}
+	}
+	return "ns-" + ns
 }
 
 func (cs *controllerServer) isVolumeAccessModeSupport(mode csi.VolumeCapability_AccessMode_Mode) bool {
@@ -104,17 +225,12 @@ func parseDevAttribs(params map[string]string) (map[string]bool, error) {
 }
 
 func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
-	sizeInByte, err := getSizeByCapacityRange(req.GetCapacityRange())
 	volName, volCap := req.GetName(), req.GetVolumeCapabilities()
 	volContentSrc := req.GetVolumeContentSource()
 
 	var srcSnapshotId string = ""
 	var srcVolumeId string = ""
 	var multiSession bool = false
-
-	if err != nil {
-		return nil, err
-	}
 
 	if volName == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "No name is provided")
@@ -125,6 +241,18 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	params := req.GetParameters()
+
+	// Parse the optional minVolumeSize StorageClass parameter before resolving
+	// the volume size, so the floor can be applied to the capacity range.
+	minVolumeSizeFloor, err := parseMinVolumeSize(params["minVolumeSize"])
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "Invalid minVolumeSize: %v", err)
+	}
+
+	sizeInByte, err := getSizeByCapacityRange(req.GetCapacityRange(), minVolumeSizeFloor)
+	if err != nil {
+		return nil, err
+	}
 
 	// Parsed before the capability loop below, which needs the protocol to tell
 	// whether the requested access type can be served.
@@ -203,7 +331,9 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		// as these parameters are reserved by external-provisioner
 		pvcNamespace := params["csi.storage.k8s.io/pvc/namespace"]
 		pvcName := params["csi.storage.k8s.io/pvc/name"]
-		description = pvcNamespace + "/" + pvcName
+		// Sanitize the namespace: DSM rejects descriptions whose namespace
+		// component is empty or digits-only (issue #134).
+		description = sanitizeDescriptionNamespace(pvcNamespace) + "/" + pvcName
 	}
 
 	nfsVer := parseNfsVesrion(mountOptions)
@@ -288,6 +418,16 @@ func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 	return &csi.DeleteVolumeResponse{}, nil
 }
 
+// ControllerPublishVolume is intentionally Unimplemented (matches upstream
+// v1.4.0). The driver does not declare the PUBLISH_UNPUBLISH_VOLUME capability
+// (see driver.go), so the CSI external-attacher never calls this RPC. The
+// existing detach path keeps working unchanged.
+//
+// When CHAP lands as a complete feature (capability + publish + unpublish +
+// TargetSetAuth), this is where the per-volume auth will be applied. Until
+// then, do not wire secrets to SetTargetAuth here: secrets provided via
+// node-stage-secret do not reach ControllerPublishVolume, so any wiring would
+// be dead code or (worse) silently misapplied. Tracked, not shipped.
 func (cs *controllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "")
 }
@@ -588,7 +728,7 @@ func (cs *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 			"InvalidArgument: Please check volume ID and capacity range.")
 	}
 
-	sizeInByte, err := getSizeByCapacityRange(capRange)
+	sizeInByte, err := getSizeByCapacityRange(capRange, 0)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument,
 			"InvalidArgument: Please check CapacityRange[%v]", capRange)

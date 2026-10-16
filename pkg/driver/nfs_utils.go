@@ -22,6 +22,19 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// nfsRootSquashValue returns the NFS RootSquash value to send in privilege
+// rules. It reads CSI_NFS_ROOT_SQUASH via os.LookupEnv on every call (not
+// cached at init) so that t.Setenv and runtime env changes are observed.
+// When the variable is absent, the upstream default "root" is returned.
+// When the variable is present — even if empty — its value is returned as-is,
+// letting operators override (or disable) root squashing without a rebuild.
+func nfsRootSquashValue() string {
+	if v, ok := os.LookupEnv("CSI_NFS_ROOT_SQUASH"); ok {
+		return v
+	}
+	return "root"
+}
+
 // mountPermissionsFor works out what to chmod a freshly mounted volume root to,
 // given what the StorageClass asked for and what is already there.
 //

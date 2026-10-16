@@ -139,11 +139,17 @@ func TestHTTPS_DefaultRejectsUntrustedCert(t *testing.T) {
 // TestHTTPS_InsecureSkipVerify_ConnectsAndSendsCredentials verifies that
 // insecureSkipVerify: true still allows connecting to an untrusted endpoint
 // (explicit opt-in) and that credentials are delivered to the server.
+//
+// Login sends the credentials as an application/x-www-form-urlencoded POST
+// body (C2 fix), so the server reads them from the body rather than the URL
+// query string.
 func TestHTTPS_InsecureSkipVerify_ConnectsAndSendsCredentials(t *testing.T) {
 	var gotAccount, gotPasswd string
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAccount = r.URL.Query().Get("account")
-		gotPasswd = r.URL.Query().Get("passwd")
+		if err := r.ParseForm(); err == nil {
+			gotAccount = r.FormValue("account")
+			gotPasswd = r.FormValue("passwd")
+		}
 		fakeDSMHandler(w, r)
 	}))
 	defer server.Close()

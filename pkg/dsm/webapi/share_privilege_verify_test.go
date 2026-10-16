@@ -28,6 +28,10 @@ type privilegeDSM struct {
 	// 2370 is retried inside nfsPrivilegeRequest, so a test that wants the
 	// read-back to actually fail has to use a code that is not.
 	loadErrCode int
+	// saveErrUntil is the number of save attempts that return saveErrCode
+	// before succeeding. Used to simulate DSM error 2370 on the save path.
+	saveErrUntil int
+	saveErrCode  int
 }
 
 func (f *privilegeDSM) handler(w http.ResponseWriter, r *http.Request) {
@@ -45,6 +49,12 @@ func (f *privilegeDSM) handler(w http.ResponseWriter, r *http.Request) {
 	switch q.Get("method") {
 	case "save":
 		f.saves++
+		// Return an explicit DSM error on the first saveErrUntil attempts
+		// (used to simulate error 2370 which must be retried).
+		if f.saves <= f.saveErrUntil {
+			w.Write([]byte(`{"success":false,"error":{"code":` + strconv.Itoa(f.saveErrCode) + `}}`))
+			return
+		}
 		if f.saves > f.applyAfter {
 			var rules []PrivilegeRule
 			if err := json.Unmarshal([]byte(q.Get("rule")), &rules); err != nil {
@@ -255,5 +265,31 @@ func TestVerifyBudgetLeavesRoomForTheMount(t *testing.T) {
 		t.Errorf("verify budget %v must exceed the per-request budget %v, "+
 			"or a single slow request consumes the whole thing and nothing is ever retried",
 			nfsPrivilegeVerifyTimeout, nfsPrivilegeRetryTimeout)
+	}
+}
+
+// DSM can transiently answer 2370 on the save path ("NFS share privilege is
+// being configured" or similar transient busy state). Today nfsPrivilegeRequest
+// only retries nfsPrivilegeShareLoadFailErrCode on the load path; 2370 on save
+// surfaces as a hard failure and the pod is stuck. The fix is to retry 2370
+// with a short backoff (cap 5 attempts). This test asserts that retry
+// behaviour: the first save returns 2370, the second succeeds, and the caller
+// observes success. Today it FAILS because 2370 is not retried on save —
+// that is the deliberate RED.
+func TestSharePrivilegeSaveRetriesOn2370(t *testing.T) {
+	withShortVerifyBudget(t, 5*time.Second)
+
+	fake := &privilegeDSM{
+		saveErrUntil: 1,    // first save returns the error
+		saveErrCode:  2370, // the specific DSM code we need retried
+	}
+	dsm, done := newPrivilegeDSM(t, fake)
+	defer done()
+
+	if err := dsm.ShareNfsPrivilegeSave(wantPrivilege()); err != nil {
+		t.Fatalf("expected the save to succeed after retrying 2370, got %v", err)
+	}
+	if fake.saves < 2 {
+		t.Errorf("expected at least 2 save attempts (1 x 2370 + 1 success), got %d", fake.saves)
 	}
 }

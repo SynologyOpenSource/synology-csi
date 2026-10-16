@@ -288,7 +288,7 @@ func (service *DsmService) createNVMeVolumeByDsm(dsm *webapi.DSM, spec *models.C
 // means the list is incomplete, so absence from it does not prove a volume is
 // gone.
 func (service *DsmService) listNVMeVolumes(dsmIp string) (infos []*models.K8sVolumeRespSpec, listErr error) {
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.snapshotDsms() {
 		if dsmIp != "" && dsmIp != dsm.Ip {
 			continue
 		}

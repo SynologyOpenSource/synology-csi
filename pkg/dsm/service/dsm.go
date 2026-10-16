@@ -7,14 +7,16 @@ package service
 import (
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/cenkalti/backoff/v4"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"strconv"
-	"time"
-	"strings"
+
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/common"
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/webapi"
 	"github.com/SynologyOpenSource/synology-csi/pkg/models"
@@ -22,7 +24,10 @@ import (
 )
 
 type DsmService struct {
-	dsms map[string]*webapi.DSM
+	// dsmsMu guards the dsms map. Concurrent AddDsm/GetDsm/ListDsmVolumes
+	// without a lock were racing on the map under -race.
+	dsmsMu sync.RWMutex
+	dsms   map[string]*webapi.DSM
 }
 
 func NewDsmService() *DsmService {
@@ -33,17 +38,20 @@ func NewDsmService() *DsmService {
 
 func (service *DsmService) AddDsm(client common.ClientInfo) error {
 	// TODO: use sn or other identifiers as key
-	if _, ok := service.dsms[client.Host]; ok {
+	service.dsmsMu.RLock()
+	_, present := service.dsms[client.Host]
+	service.dsmsMu.RUnlock()
+	if present {
 		log.Infof("Adding DSM [%s] already present.", client.Host)
 		return nil
 	}
 
 	dsm := &webapi.DSM{
-		Ip:       client.Host,
-		Port:     client.Port,
-		Username: client.Username,
-		Password: client.Password,
-		Https:    client.Https,
+		Ip:                 client.Host,
+		Port:               client.Port,
+		Username:           client.Username,
+		Password:           client.Password,
+		Https:              client.Https,
 		TLSCACert:          client.TLSCACert,
 		TLSServerName:      client.TLSServerName,
 		InsecureSkipVerify: client.InsecureSkipVerify,
@@ -56,13 +64,15 @@ func (service *DsmService) AddDsm(client common.ClientInfo) error {
 		return fmt.Errorf("Failed to get system info of DSM: [%s]. err: %v", dsm.Ip, err)
 	}
 
+	service.dsmsMu.Lock()
 	service.dsms[dsm.Ip] = dsm
+	service.dsmsMu.Unlock()
 	log.Infof("Add DSM [%s] hostname: %s.", dsm.Ip, dsm.Hostname)
 	return nil
 }
 
 func (service *DsmService) RemoveAllDsms() {
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.snapshotDsms() {
 		log.Infof("Going to logout DSM [%s]", dsm.Ip)
 
 		for i := 0; i < 3; i++ {
@@ -77,21 +87,57 @@ func (service *DsmService) RemoveAllDsms() {
 }
 
 func (service *DsmService) GetDsm(ip string) (*webapi.DSM, error) {
+	service.dsmsMu.RLock()
 	dsm, ok := service.dsms[ip]
+	service.dsmsMu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("Requested dsm [%s] does not exist", ip)
 	}
 	return dsm, nil
 }
 
+// SetTargetAuth configures CHAP authentication on a target hosted on the DSM
+// at dsmIp. It wraps webapi.DSM.TargetSetAuth so callers do not need to
+// resolve the DSM handle themselves.
+//
+// ARCHITECTURE (patch 0004 — groundwork only): kept as part of the CHAP
+// groundwork; see webapi/iscsi.go TargetSetAuth for the full rationale.
+// Not wired into ControllerPublishVolume yet — tracked, not shipped.
+func (service *DsmService) SetTargetAuth(dsmIp string, targetId string, chapUser string, chapPass string) error {
+	dsm, err := service.GetDsm(dsmIp)
+	if err != nil {
+		return fmt.Errorf("failed to get DSM [%s] for CHAP auth: %v", dsmIp, err)
+	}
+	if err := dsm.TargetSetAuth(targetId, chapUser, chapPass); err != nil {
+		return fmt.Errorf("failed to set CHAP auth on target [%s]: %v", targetId, err)
+	}
+	return nil
+}
+
 func (service *DsmService) GetDsmsCount() int {
-	return len(service.dsms)
+	service.dsmsMu.RLock()
+	n := len(service.dsms)
+	service.dsmsMu.RUnlock()
+	return n
+}
+
+// snapshotDsms returns a snapshot of the current DSM pointers under the
+// read lock. Callers iterate the snapshot without holding the lock so
+// network I/O in the loop body never blocks a concurrent AddDsm/GetDsm.
+func (service *DsmService) snapshotDsms() []*webapi.DSM {
+	service.dsmsMu.RLock()
+	out := make([]*webapi.DSM, 0, len(service.dsms))
+	for _, dsm := range service.dsms {
+		out = append(out, dsm)
+	}
+	service.dsmsMu.RUnlock()
+	return out
 }
 
 func (service *DsmService) ListDsmVolumes(ip string) ([]webapi.VolInfo, error) {
 	var allVolInfos []webapi.VolInfo
 
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.snapshotDsms() {
 		if ip != "" && dsm.Ip != ip {
 			continue
 		}
@@ -463,9 +509,9 @@ func (service *DsmService) createVolumeByVolume(dsm *webapi.DSM, spec *models.Cr
 	}
 
 	lunCloneSpec := webapi.LunCloneSpec{
-		Name:            spec.BackendName,
-		SrcLunUuid:      srcLunInfo.Uuid,
-		Location:        spec.Location,
+		Name:       spec.BackendName,
+		SrcLunUuid: srcLunInfo.Uuid,
+		Location:   spec.Location,
 	}
 
 	if _, err := dsm.LunClone(lunCloneSpec); err != nil {
@@ -526,43 +572,43 @@ func DsmShareToK8sVolume(dsmIp string, info webapi.ShareInfo, protocol string) *
 	}
 
 	return &models.K8sVolumeRespSpec{
-		DsmIp: dsmIp,
-		VolumeId: info.Uuid,
+		DsmIp:       dsmIp,
+		VolumeId:    info.Uuid,
 		SizeInBytes: utils.MBToBytes(info.QuotaValueInMB),
-		Location: info.VolPath,
-		Name: info.Name,
-		Source: source,
-		Protocol: protocol,
-		Share: info,
-		BaseDir: baseDir,
+		Location:    info.VolPath,
+		Name:        info.Name,
+		Source:      source,
+		Protocol:    protocol,
+		Share:       info,
+		BaseDir:     baseDir,
 	}
 }
 
 func DsmLunToK8sVolume(dsmIp string, info webapi.LunInfo, targetInfo webapi.TargetInfo) *models.K8sVolumeRespSpec {
 	return &models.K8sVolumeRespSpec{
-		DsmIp: dsmIp,
-		VolumeId: info.Uuid,
+		DsmIp:       dsmIp,
+		VolumeId:    info.Uuid,
 		SizeInBytes: int64(info.Size),
-		Location: info.Location,
-		Name: info.Name,
-		Source: "",
-		Protocol: utils.ProtocolIscsi,
-		Lun: info,
-		Target: targetInfo,
+		Location:    info.Location,
+		Name:        info.Name,
+		Source:      "",
+		Protocol:    utils.ProtocolIscsi,
+		Lun:         info,
+		Target:      targetInfo,
 	}
 }
 
 func DsmNamespaceToK8sVolume(dsmIp string, info webapi.NamespaceInfo, subsystemInfo webapi.SubsystemInfo) *models.K8sVolumeRespSpec {
 	return &models.K8sVolumeRespSpec{
-		DsmIp: dsmIp,
-		VolumeId: info.Uuid,
+		DsmIp:       dsmIp,
+		VolumeId:    info.Uuid,
 		SizeInBytes: int64(info.Size),
-		Location: info.Location,
-		Name: info.Name,
-		Source: "",
-		Protocol: utils.ProtocolNvme,
-		Namespace: info,
-		Subsystem: subsystemInfo,
+		Location:    info.Location,
+		Name:        info.Name,
+		Source:      "",
+		Protocol:    utils.ProtocolNvme,
+		Namespace:   info,
+		Subsystem:   subsystemInfo,
 	}
 }
 
@@ -603,7 +649,6 @@ func isNfsVersionSupport(dsm *webapi.DSM, nfsVersion string) bool {
 
 	return true
 }
-
 
 func (service *DsmService) CreateVolume(spec *models.CreateK8sVolumeSpec) (*models.K8sVolumeRespSpec, error) {
 	if spec.SourceVolumeId != "" {
@@ -675,7 +720,7 @@ func (service *DsmService) CreateVolume(spec *models.CreateK8sVolumeSpec) (*mode
 	}
 
 	/* Find appropriate dsm to create volume */
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.snapshotDsms() {
 		if spec.DsmIp != "" && spec.DsmIp != dsm.Ip {
 			continue
 		}
@@ -739,7 +784,7 @@ func (service *DsmService) DeleteVolume(volId string) error {
 
 		namespace, subsystem := k8sVolume.Namespace, k8sVolume.Subsystem
 		if err := dsm.NamespaceDelete(namespace.Uuid); err != nil {
-			if  _, err := dsm.NamespaceGet(namespace.Uuid); err != nil && errors.Is(err, utils.NoSuchNamespaceError("")) {
+			if _, err := dsm.NamespaceGet(namespace.Uuid); err != nil && errors.Is(err, utils.NoSuchNamespaceError("")) {
 				return nil
 			}
 			log.Errorf("[%s] Failed to delete Namespace(%s): %v", dsm.Ip, namespace.Uuid, err)
@@ -747,7 +792,7 @@ func (service *DsmService) DeleteVolume(volId string) error {
 		}
 
 		if err := dsm.SubsystemDelete(subsystem.Uuid); err != nil {
-			if  _, err := dsm.SubsystemGet(subsystem.Uuid); err != nil && errors.Is(err, utils.FailedToGetSubsystemError("")) {
+			if _, err := dsm.SubsystemGet(subsystem.Uuid); err != nil && errors.Is(err, utils.FailedToGetSubsystemError("")) {
 				return nil
 			}
 			log.Errorf("[%s] Failed to delete Subsystem(%s): %v", dsm.Ip, subsystem.Uuid, err)
@@ -757,7 +802,7 @@ func (service *DsmService) DeleteVolume(volId string) error {
 		lun, target := k8sVolume.Lun, k8sVolume.Target
 
 		if err := dsm.LunDelete(lun.Uuid); err != nil {
-			if  _, err := dsm.LunGet(lun.Uuid); err != nil && errors.Is(err, utils.NoSuchLunError("")) {
+			if _, err := dsm.LunGet(lun.Uuid); err != nil && errors.Is(err, utils.NoSuchLunError("")) {
 				return nil
 			}
 			log.Errorf("[%s] Failed to delete LUN(%s): %v", dsm.Ip, lun.Uuid, err)
@@ -770,7 +815,7 @@ func (service *DsmService) DeleteVolume(volId string) error {
 		}
 
 		if err := dsm.TargetDelete(strconv.Itoa(target.TargetId)); err != nil {
-			if  _, err := dsm.TargetGet(strconv.Itoa(target.TargetId)); err != nil {
+			if _, err := dsm.TargetGet(strconv.Itoa(target.TargetId)); err != nil {
 				return nil
 			}
 			log.Errorf("[%s] Failed to delete target(%d): %v", dsm.Ip, target.TargetId, err)
@@ -785,7 +830,7 @@ func (service *DsmService) DeleteVolume(volId string) error {
 // the list is incomplete: some volume may exist without appearing here, so the
 // caller must not read an absence from it as proof that a volume is gone.
 func (service *DsmService) listISCSIVolumes(dsmIp string) (infos []*models.K8sVolumeRespSpec, listErr error) {
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.snapshotDsms() {
 		if dsmIp != "" && dsmIp != dsm.Ip {
 			continue
 		}
@@ -947,7 +992,7 @@ func (service *DsmService) ExpandVolume(volId string, newSize int64) (*models.K8
 		}
 
 		spec := webapi.NamespaceSetSpec{
-			Uuid: volId,
+			Uuid:    volId,
 			NewSize: uint64(newSize),
 		}
 		if err := dsm.NamespaceSet(spec); err != nil {
@@ -956,7 +1001,7 @@ func (service *DsmService) ExpandVolume(volId string, newSize int64) (*models.K8
 		k8sVolume.SizeInBytes = newSize
 	} else {
 		spec := webapi.LunUpdateSpec{
-			Uuid: volId,
+			Uuid:    volId,
 			NewSize: uint64(newSize),
 		}
 		if err := dsm.LunUpdate(spec); err != nil {
@@ -987,17 +1032,17 @@ func (service *DsmService) CreateSnapshot(spec *models.CreateK8sVolumeSnapshotSp
 
 	if k8sVolume.Protocol == utils.ProtocolIscsi {
 		snapshotSpec := webapi.SnapshotCreateSpec{
-			Name:    spec.SnapshotName,
-			SrcUuid: srcVolId,
+			Name:        spec.SnapshotName,
+			SrcUuid:     srcVolId,
 			Description: spec.Description,
-			TakenBy: spec.TakenBy,
-			IsLocked: spec.IsLocked,
+			TakenBy:     spec.TakenBy,
+			IsLocked:    spec.IsLocked,
 		}
 
 		snapshotUuid, err := dsm.SnapshotCreate(snapshotSpec)
 		if err != nil {
 			if err == utils.OutOfFreeSpaceError("") || err == utils.SnapshotReachMaxCountError("") {
-				return nil,status.Errorf(codes.ResourceExhausted, fmt.Sprintf("Failed to SnapshotCreate(%s), err: %v", srcVolId, err))
+				return nil, status.Errorf(codes.ResourceExhausted, fmt.Sprintf("Failed to SnapshotCreate(%s), err: %v", srcVolId, err))
 			}
 			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to SnapshotCreate(%s), err: %v", srcVolId, err))
 		}
@@ -1033,16 +1078,16 @@ func (service *DsmService) CreateSnapshot(spec *models.CreateK8sVolumeSnapshotSp
 		}
 
 		snapshotSpec := webapi.SnapshotCreateSpec{
-			Name:    spec.SnapshotName,
-			SrcUuid: srcVolId,
+			Name:        spec.SnapshotName,
+			SrcUuid:     srcVolId,
 			Description: spec.Description,
-			TakenBy: spec.TakenBy,
-			IsLocked: spec.IsLocked,
+			TakenBy:     spec.TakenBy,
+			IsLocked:    spec.IsLocked,
 		}
 		snapshotUuid, err := dsm.NamespaceSnapshotCreate(snapshotSpec)
 		if err != nil {
 			if err == utils.OutOfFreeSpaceError("") || err == utils.SnapshotReachMaxCountError("") {
-				return nil,status.Errorf(codes.ResourceExhausted, fmt.Sprintf("Failed to NamespaceSnapshotCreate(%s), err: %v", srcVolId, err))
+				return nil, status.Errorf(codes.ResourceExhausted, fmt.Sprintf("Failed to NamespaceSnapshotCreate(%s), err: %v", srcVolId, err))
 			}
 			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to NamespaceSnapshotCreate(%s), err: %v", srcVolId, err))
 		}
@@ -1137,7 +1182,7 @@ func (service *DsmService) listISCSISnapshotsByDsm(dsm *webapi.DSM) (infos []*mo
 func (service *DsmService) ListAllSnapshots() []*models.K8sSnapshotRespSpec {
 	var allInfos []*models.K8sSnapshotRespSpec
 
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.snapshotDsms() {
 		allInfos = append(allInfos, service.listISCSISnapshotsByDsm(dsm)...)
 		allInfos = append(allInfos, service.listSMBorNFSSnapshotsByDsm(dsm)...)
 		allInfos = append(allInfos, service.listNVMeSnapshotsByDsm(dsm)...)
@@ -1198,38 +1243,38 @@ func (service *DsmService) ListSnapshots(volId string) []*models.K8sSnapshotResp
 
 func DsmShareSnapshotToK8sSnapshot(dsmIp string, info webapi.ShareSnapshotInfo, shareInfo webapi.ShareInfo, protocol string) *models.K8sSnapshotRespSpec {
 	return &models.K8sSnapshotRespSpec{
-		DsmIp: dsmIp,
-		Name: strings.ReplaceAll(info.Desc, models.ShareSnapshotDescPrefix, ""), // snapshot-XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
-		Uuid: info.Uuid,
-		ParentName: shareInfo.Name,
-		ParentUuid: shareInfo.Uuid,
-		Status: "Healthy", // share snapshot always Healthy
+		DsmIp:       dsmIp,
+		Name:        strings.ReplaceAll(info.Desc, models.ShareSnapshotDescPrefix, ""), // snapshot-XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
+		Uuid:        info.Uuid,
+		ParentName:  shareInfo.Name,
+		ParentUuid:  shareInfo.Uuid,
+		Status:      "Healthy",                                 // share snapshot always Healthy
 		SizeInBytes: utils.MBToBytes(shareInfo.QuotaValueInMB), // unable to get snapshot quota, return parent quota instead
-		CreateTime: GMTToUnixSecond(info.Time),
-		Time: info.Time,
-		RootPath: shareInfo.VolPath,
-		Protocol: protocol,
+		CreateTime:  GMTToUnixSecond(info.Time),
+		Time:        info.Time,
+		RootPath:    shareInfo.VolPath,
+		Protocol:    protocol,
 	}
 }
 
 func DsmSanSnapshotToK8sSnapshot(dsmIp string, info webapi.SnapshotInfo, protocol string) *models.K8sSnapshotRespSpec {
 	return &models.K8sSnapshotRespSpec{
-		DsmIp: dsmIp,
-		Name: info.Name,
-		Uuid: info.Uuid,
-		ParentName: "", // it can be empty for iscsi/nvme
-		ParentUuid: info.ParentUuid,
-		Status: info.Status,
+		DsmIp:       dsmIp,
+		Name:        info.Name,
+		Uuid:        info.Uuid,
+		ParentName:  "", // it can be empty for iscsi/nvme
+		ParentUuid:  info.ParentUuid,
+		Status:      info.Status,
 		SizeInBytes: info.TotalSize,
-		CreateTime: info.CreateTime,
-		Time: "",
-		RootPath: info.RootPath,
-		Protocol: protocol,
+		CreateTime:  info.CreateTime,
+		Time:        "",
+		RootPath:    info.RootPath,
+		Protocol:    protocol,
 	}
 }
 
 func (service *DsmService) getISCSISnapshot(snapshotUuid string) *models.K8sSnapshotRespSpec {
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.snapshotDsms() {
 		snapshots := service.listISCSISnapshotsByDsm(dsm)
 		for _, snap := range snapshots {
 			if snap.Uuid == snapshotUuid {

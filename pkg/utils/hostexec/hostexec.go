@@ -62,6 +62,27 @@ func (h *hostexec) wrapEnv(cmd string, args ...string) (string, []string) {
 		return cmd, args
 	}
 
+	// Talos chroots do not ship /usr/bin/env. When the chroot has no env,
+	// resolve the binary directly under the chroot using defaultSearchPath
+	// and return its chroot-relative path so wrapChroot can execute it
+	// without the env indirection (issue #130).
+	if h.chrootDir != "" {
+		envInChroot := h.chrootDir + "/usr/bin/env"
+		if _, err := os.Stat(envInChroot); err != nil {
+			for _, dir := range defaultSearchPath {
+				candidate := h.chrootDir + dir + "/" + cmd
+				if fi, err := os.Stat(candidate); err == nil && !fi.IsDir() {
+					// chroot-relative path: contains a slash so GNU chroot
+					// treats it as a path inside the new root rather than
+					// looking it up through PATH.
+					return strings.TrimPrefix(dir, "/") + "/" + cmd, args
+				}
+			}
+			// Not found in the chroot; fall through to the env path and let
+			// execution fail as before.
+		}
+	}
+
 	sp := fmt.Sprintf("PATH=%s", strings.Join(defaultSearchPath, ":"))
 	args = append([]string{"-i", sp, cmd}, args...)
 	cmd = "/usr/bin/env"

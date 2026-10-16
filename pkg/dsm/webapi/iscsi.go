@@ -292,6 +292,44 @@ func (dsm *DSM) TargetSet(targetId string, maxSession int) error {
 	return nil
 }
 
+// TargetSetAuth configures CHAP authentication on an iSCSI target. The DSM API
+// expects auth_type "1" for CHAP (auth_type "0" disables authentication).
+// chapUser and chapPass are the CHAP credentials the initiator must present
+// when connecting to the target.
+//
+// ARCHITECTURE (patch 0004 — groundwork only):
+// This function exists so a future CHAP feature can configure per-target auth
+// without re-adding the webapi layer. The driver-level wiring
+// (ControllerPublishVolume reading chapUser/chapPassword from req.GetSecrets()
+// and calling service.SetTargetAuth) was removed from patch 0004 because:
+//   1. The PUBLISH_UNPUBLISH_VOLUME capability is not declared (driver.go),
+//      so ControllerPublishVolume is never called by the external-attacher.
+//   2. StorageClass `csi.storage.k8s.io/node-stage-secret` is delivered to
+//      NodeStageVolume, NOT to ControllerPublishVolume — so even if the
+//      capability were added, the secrets would not reach the handler.
+// The complete CHAP feature will require: capability declaration, a secret
+// path that actually reaches ControllerPublish (likely provisioner-secret or
+// a dedicated controller secret ref), AND a ControllerUnpublishVolume that
+// resets auth_type=0 on detach (otherwise reattach of the same target to a
+// different node fails DSM-side). Tracked, not shipped.
+func (dsm *DSM) TargetSetAuth(targetId string, chapUser string, chapPass string) error {
+	params := url.Values{}
+	params.Add("api", "SYNO.Core.ISCSI.Target")
+	params.Add("method", "set")
+	params.Add("version", "1")
+	params.Add("target_id", strconv.Quote(targetId))
+	params.Add("auth_type", "1")
+	params.Add("chap_user", chapUser)
+	params.Add("chap_pass", chapPass)
+
+	resp, err := dsm.sendRequest("", &struct{}{}, params, "webapi/entry.cgi")
+	if err != nil {
+		return errCodeMapping(resp.ErrorCode, err)
+	}
+
+	return nil
+}
+
 func (dsm *DSM) TargetCreate(spec TargetCreateSpec) (string, error) {
 	params := url.Values{}
 	params.Add("api", "SYNO.Core.ISCSI.Target")

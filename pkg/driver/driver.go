@@ -72,6 +72,11 @@ func NewControllerAndNodeDriver(nodeID string, endpoint string, dsmService inter
 		csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS,
 		csi.ControllerServiceCapability_RPC_CLONE_VOLUME,
 		csi.ControllerServiceCapability_RPC_GET_CAPACITY,
+		// NOTE: RPC_PUBLISH_UNPUBLISH_VOLUME is intentionally NOT declared
+		// (matches upstream v1.4.0). Without the capability, the CSI external-
+		// attacher will never call ControllerPublish/UnpublishVolume, so the
+		// existing detach path keeps working unchanged. CHAP (when it lands)
+		// will be wired together with this capability in a single feature PR.
 	})
 
 	d.addVolumeCapabilityAccessModes([]csi.VolumeCapability_AccessMode_Mode{

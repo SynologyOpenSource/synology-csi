@@ -70,6 +70,9 @@ func (s *lookupFailingService) ListSnapshots(volId string) []*models.K8sSnapshot
 func (s *lookupFailingService) GetSnapshotByName(snapshotName string) *models.K8sSnapshotRespSpec {
 	return nil
 }
+func (s *lookupFailingService) SetTargetAuth(dsmIp string, targetId string, chapUser string, chapPass string) error {
+	return nil
+}
 
 // testDriver mirrors the access modes the real driver registers, so requests
 // reach the lookup instead of being rejected by capability validation first.

@@ -63,7 +63,7 @@ func (t *tools) iscsiadm(cmdArgs ...string) utilexec.Cmd {
 	return t.executor.Command("iscsiadm", cmdArgs...)
 }
 
-// parseSession takes the raw stdout from the `iscsiadm -m session` command and encodes it into an iSCSI session type
+// parseSessions takes the raw stdout from the `iscsiadm -m session` command and encodes it into an iSCSI session type
 func parseSessions(lines string) []iscsiSession {
 	entries := strings.Split(strings.TrimSpace(lines), "\n")
 	r := strings.NewReplacer("[", "",
@@ -80,12 +80,23 @@ func parseSessions(lines string) []iscsiSession {
 		id64, _ := strconv.ParseInt(id, 10, 32)
 		portal := strings.Split(e[2], ",")[0]
 
+		// The IQN field may be a non-IQN identifier (eui.*, naa.*) that does
+		// not contain a colon. Tolerate that: only split the name off when a
+		// colon is present, otherwise use the whole field as both Iqn and
+		// Name. The previous code did `strings.Split(e[3], ":")[1]`
+		// unconditionally, which panicked on colon-less identifiers.
+		iqn := e[3]
+		name := iqn
+		if idx := strings.LastIndex(iqn, ":"); idx >= 0 && idx < len(iqn)-1 {
+			name = iqn[idx+1:]
+		}
+
 		s := iscsiSession{
 			Protocol: protocol,
 			Id:       int32(id64),
 			Portal:   portal,
-			Iqn:      e[3],
-			Name:     strings.Split(e[3], ":")[1],
+			Iqn:      iqn,
+			Name:     name,
 		}
 		sessions = append(sessions, s)
 	}

@@ -457,7 +457,7 @@ func (ns *nodeServer) setNFSVolumePrivilege(sourcePath string, hostnames []strin
 			Crossmnt:   true,
 			Insecure:   true,
 			Privilege:  string(authType),
-			RootSquash: "root",
+			RootSquash: nfsRootSquashValue(),
 			SecurityFlavor: webapi.SecurityFlavor{
 				Kerbros:          false,
 				KerbrosIntegrity: false,
@@ -1102,7 +1102,7 @@ func (ns *nodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 
 func (ns *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
 	volumeId, volumePath := req.GetVolumeId(), req.GetVolumePath()
-	sizeInByte, err := getSizeByCapacityRange(req.GetCapacityRange())
+	sizeInByte, err := getSizeByCapacityRange(req.GetCapacityRange(), 0)
 	if volumeId == "" || volumePath == "" {
 		return nil, status.Error(codes.InvalidArgument, "InvalidArgument: Please check volume ID and volume path.")
 	}

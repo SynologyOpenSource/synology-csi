@@ -164,9 +164,18 @@ func lsblk(devicePaths []string, strict bool) ([]Device, error) {
 	// Parse devices
 	lines := strings.Split(strings.Trim(string(out), "\n"), "\n")
 	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		// Use Split(" ") (not Fields) so an empty PKNAME for a root device
+		// survives as an empty column — the root filter below relies on it.
+		// The previous guard (`len(columns) < 5`) crashed on columns[5] and
+		// columns[6] access when a line was short. Require the full 7
+		// columns we asked lsblk for; skip any malformed line cleanly.
 		columns := strings.Split(line, " ")
-		if len(columns) < 5 {
-			return nil, fmt.Errorf("invalid output from lsblk: %s", line)
+		if len(columns) < 7 {
+			log.Debugf("lsblk: skipping malformed line (%d columns): %q", len(columns), line)
+			continue
 		}
 		device := &Device{
 			Name:      columns[0],

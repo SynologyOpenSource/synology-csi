@@ -13,23 +13,36 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/SynologyOpenSource/synology-csi/pkg/logger"
 	log "github.com/sirupsen/logrus"
 )
 
+// dsmHTTPTimeout is the per-request timeout applied to every DSM HTTP call.
+// It is a var (not a const) so tests can override it. The default of 30s
+// prevents a hanging DSM from blocking a gRPC handler indefinitely.
+var dsmHTTPTimeout = 30 * time.Second
+
 type DSM struct {
-	Ip         string
-	Port       int
-	Username   string
-	Password   string
-	Sid        string
-	Https      bool
-	Controller string
+	Ip                 string
+	Port               int
+	Username           string
+	Password           string
+	Sid                string
+	Https              bool
+	Controller         string
 	TLSCACert          string
 	TLSServerName      string
 	InsecureSkipVerify bool
 	SystemInfo
+
+	// sidMu guards Sid. Login writes it, every handler reads it to build the
+	// session cookie. Without a mutex concurrent logins and concurrent
+	// request/send races were observed under -race.
+	sidMu sync.RWMutex
 }
 
 type SystemInfo struct {
@@ -56,7 +69,7 @@ type Response struct {
 
 func (dsm *DSM) newHTTPClient() (*http.Client, error) {
 	if !dsm.Https {
-		return &http.Client{}, nil
+		return &http.Client{Timeout: dsmHTTPTimeout}, nil
 	}
 
 	tlsCfg := &tls.Config{}
@@ -87,7 +100,7 @@ func (dsm *DSM) newHTTPClient() (*http.Client, error) {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.TLSClientConfig = tlsCfg
 
-	return &http.Client{Transport: tr}, nil
+	return &http.Client{Transport: tr, Timeout: dsmHTTPTimeout}, nil
 }
 
 func (dsm *DSM) sendRequest(data string, apiTemplate interface{}, params url.Values, cgiPath string) (Response, error) {
@@ -128,7 +141,7 @@ func (dsm *DSM) sendRequestWithoutConnectionCheck(data string, apiTemplate inter
 	baseUrl.RawQuery = params.Encode()
 
 	if logger.WebapiDebug {
-		log.Debugln(baseUrl.RawQuery)
+		log.Debugln(redactSecrets(baseUrl.RawQuery))
 	}
 
 	if data != "" {
@@ -137,8 +150,11 @@ func (dsm *DSM) sendRequestWithoutConnectionCheck(data string, apiTemplate inter
 		req, err = http.NewRequest("GET", baseUrl.String(), nil)
 	}
 
-	if dsm.Sid != "" {
-		cookie := http.Cookie{Name: "id", Value: dsm.Sid}
+	dsm.sidMu.RLock()
+	sid := dsm.Sid
+	dsm.sidMu.RUnlock()
+	if sid != "" {
+		cookie := http.Cookie{Name: "id", Value: sid}
 		req.AddCookie(&cookie)
 	}
 
@@ -206,31 +222,107 @@ func (dsm *DSM) sendRequestWithoutConnectionCheck(data string, apiTemplate inter
 	return outResp, nil
 }
 
-// Login by given user name and password
+// redactSecrets replaces passwd=...& and passwd=...$ occurrences in a query
+// string / URL body with [REDACTED]. Defense in depth: after C2 the password
+// no longer appears in the URL at all, but any future caller that adds a
+// sensitive parameter must not accidentally log it either.
+func redactSecrets(s string) string {
+	// Match passwd= up to the next & or end-of-string.
+	re := regexp.MustCompile(`passwd=[^&\s]*`)
+	return re.ReplaceAllString(s, "passwd=[REDACTED]")
+}
+
+// setSid writes the session id under the write lock.
+func (dsm *DSM) setSid(s string) {
+	dsm.sidMu.Lock()
+	dsm.Sid = s
+	dsm.sidMu.Unlock()
+}
+
+// Login by given user name and password.
+//
+// Sends the credentials as an application/x-www-form-urlencoded POST body —
+// never in the URL — so the password does not leak through access logs,
+// browser history, or the debug output of sendRequestWithoutConnectionCheck.
+// Concurrent logins are serialized via sidMu (write-held for the duration).
+// Note: sidMu is held across the full HTTP round-trip (up to dsmHTTPTimeout,
+// typically 30s) — this is intentional, as releasing it mid-flight would let
+// a concurrent Login or cookie-read observe a half-updated session state.
+// Any DSM call that goes through sendRequestWithoutConnectionCheck will
+// block on sidMu.RLock() until Login returns, which is the correct
+// serialization for "no API call may use the session before the handshake
+// has completed".
 func (dsm *DSM) Login() error {
-	params := url.Values{}
-	params.Add("api", "SYNO.API.Auth")
-	params.Add("method", "login")
-	params.Add("version", "3")
-	params.Add("account", dsm.Username)
-	params.Add("passwd", dsm.Password)
-	params.Add("format", "sid")
+	dsm.sidMu.Lock()
+	defer dsm.sidMu.Unlock()
+
+	form := url.Values{}
+	form.Add("api", "SYNO.API.Auth")
+	form.Add("method", "login")
+	form.Add("version", "3")
+	form.Add("account", dsm.Username)
+	form.Add("passwd", dsm.Password)
+	form.Add("format", "sid")
+	body := strings.NewReader(form.Encode())
+
+	var cgiUrl string
+	if dsm.Https {
+		cgiUrl = fmt.Sprintf("https://%s:%d/webapi/auth.cgi", dsm.Ip, dsm.Port)
+	} else {
+		cgiUrl = fmt.Sprintf("http://%s:%d/webapi/auth.cgi", dsm.Ip, dsm.Port)
+	}
+
+	client, err := dsm.newHTTPClient()
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", cgiUrl, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("login to DSM [%s] failed: %v", dsm.Ip, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode != 200 && resp.StatusCode != 302 {
+		return fmt.Errorf("Bad response status code: %d", resp.StatusCode)
+	}
 
 	type LoginResp struct {
 		Sid string `json:"sid"`
 	}
-
-	resp, err := dsm.sendRequestWithoutConnectionCheck("", &LoginResp{}, params, "webapi/auth.cgi")
-	if err != nil {
-		r, _ := regexp.Compile("passwd=.*&")
-		temp := r.ReplaceAllString(err.Error(), "")
-
-		return fmt.Errorf("%s", temp)
+	type envelop struct {
+		dsmApiResp
+		Data json.RawMessage `json:"data"`
 	}
-
-	loginResp, ok := resp.Data.(*LoginResp)
-	if !ok {
-		return fmt.Errorf("Failed to assert response to %T", &LoginResp{})
+	e := envelop{}
+	if err := json.Unmarshal(respBody, &e); err != nil {
+		return err
+	}
+	if !e.Success {
+		return fmt.Errorf("DSM Api error. Error code:%d", e.Err.Code)
+	}
+	loginResp := &LoginResp{}
+	if e.Data != nil {
+		if err := json.Unmarshal(e.Data, loginResp); err != nil {
+			return err
+		}
+	}
+	if loginResp.Sid == "" {
+		// DSM answered success:true but with no data (or data without a sid).
+		// Treating that as a successful login would silently publish Sid=""
+		// and leave every subsequent API call unauthenticated.
+		return fmt.Errorf("DSM login succeeded but returned no session id")
 	}
 	dsm.Sid = loginResp.Sid
 
@@ -248,7 +340,7 @@ func (dsm *DSM) Logout() error {
 	if err != nil {
 		return err
 	}
-	dsm.Sid = ""
+	dsm.setSid("")
 
 	return nil
 }

@@ -30,4 +30,8 @@ type IDsmService interface {
 	ListSnapshots(volId string) []*models.K8sSnapshotRespSpec
 	GetVolumeByName(volName string) (*models.K8sVolumeRespSpec, error)
 	GetSnapshotByName(snapshotName string) *models.K8sSnapshotRespSpec
+	// SetTargetAuth configures CHAP authentication on an iSCSI target hosted on
+	// the DSM at dsmIp. It wraps webapi.DSM.TargetSetAuth so callers do not need
+	// to thread the DSM handle themselves.
+	SetTargetAuth(dsmIp string, targetId string, chapUser string, chapPass string) error
 }

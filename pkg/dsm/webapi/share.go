@@ -10,31 +10,31 @@ import (
 	"strconv"
 	"time"
 
-	log "github.com/sirupsen/logrus"
-	"github.com/SynologyOpenSource/synology-csi/pkg/utils"
 	"github.com/SynologyOpenSource/synology-csi/pkg/logger"
+	"github.com/SynologyOpenSource/synology-csi/pkg/utils"
 	"github.com/cenkalti/backoff/v4"
+	log "github.com/sirupsen/logrus"
 )
 
 type ShareInfo struct {
-	Name                string `json:"name"`                        // required
-	VolPath             string `json:"vol_path"`                    // required
+	Name                string `json:"name"`     // required
+	VolPath             string `json:"vol_path"` // required
 	Desc                string `json:"desc"`
-	EnableShareCow      bool   `json:"enable_share_cow"`            // field for create
+	EnableShareCow      bool   `json:"enable_share_cow"` // field for create
 	EnableRecycleBin    bool   `json:"enable_recycle_bin"`
 	RecycleBinAdminOnly bool   `json:"recycle_bin_admin_only"`
-	Encryption          int    `json:"encryption"`                  // field for create
+	Encryption          int    `json:"encryption"` // field for create
 	QuotaForCreate      *int64 `json:"share_quota,omitempty"`
-	QuotaValueInMB      int64  `json:"quota_value"`                 // field for get
-	SupportSnapshot     bool   `json:"support_snapshot"`            // field for get
-	Uuid                string `json:"uuid"`                        // field for get
-	NameOrg             string `json:"name_org"`                    // required for clone
+	QuotaValueInMB      int64  `json:"quota_value"`      // field for get
+	SupportSnapshot     bool   `json:"support_snapshot"` // field for get
+	Uuid                string `json:"uuid"`             // field for get
+	NameOrg             string `json:"name_org"`         // required for clone
 }
 
 type ShareUpdateInfo struct {
-	Name                string `json:"name"`                        // required
-	VolPath             string `json:"vol_path"`                    // required
-	QuotaForCreate      *int64 `json:"share_quota,omitempty"`
+	Name           string `json:"name"`     // required
+	VolPath        string `json:"vol_path"` // required
+	QuotaForCreate *int64 `json:"share_quota,omitempty"`
 	// Add properties you want to update to shares here
 }
 
@@ -66,7 +66,7 @@ type ShareSnapshotCreateSpec struct {
 
 type SharePermissionSetSpec struct {
 	Name          string
-	UserGroupType string            // "local_user"/"local_group"/"system"
+	UserGroupType string // "local_user"/"local_group"/"system"
 	Permissions   []*SharePermission
 }
 
@@ -499,9 +499,12 @@ func (dsm *DSM) ShareNfsPrivilegeSave(privilege SharePrivilege) error {
 	attempts := 0
 	return backoff.Retry(func() error {
 		attempts++
-		if err := dsm.shareNfsPrivilegeSaveOnce(privilege); err != nil {
-			// nfsPrivilegeRequest has already retried what is worth retrying at
-			// the request level; anything left is the caller's problem.
+		// Save the rules, retrying briefly when DSM answers 2370 (transient
+		// "share privilege is being configured" / busy state). Cap 5 attempts,
+		// 2s constant backoff — on top of the per-request retry already
+		// performed by nfsPrivilegeRequest. Any other error is permanent for
+		// this iteration.
+		if err := dsm.saveNfsPrivilegeWith2370Retry(privilege); err != nil {
 			return backoff.Permanent(err)
 		}
 
@@ -529,7 +532,27 @@ func (dsm *DSM) ShareNfsPrivilegeSave(privilege SharePrivilege) error {
 	}, busyBackOff(nfsPrivilegeVerifyTimeout))
 }
 
-func (dsm *DSM) shareNfsPrivilegeSaveOnce(privilege SharePrivilege) error {
+// saveNfsPrivilegeWith2370Retry wraps shareNfsPrivilegeSaveOnce with a retry
+// loop that specifically handles DSM error 2370: up to 5 attempts, 2s constant
+// backoff between them. Any other error is permanent and returned immediately.
+func (dsm *DSM) saveNfsPrivilegeWith2370Retry(privilege SharePrivilege) error {
+	const nfsPrivilege2370MaxAttempts = 5
+	b := backoff.WithMaxRetries(backoff.NewConstantBackOff(2*time.Second), nfsPrivilege2370MaxAttempts)
+	return backoff.Retry(func() error {
+		code, err := dsm.shareNfsPrivilegeSaveOnce(privilege)
+		if err == nil {
+			return nil
+		}
+		if code == nfsPrivilegeShareLoadFailErrCode {
+			log.Infof("DSM[%s] save of NFS privilege for share(%s) returned error %d, retrying",
+				dsm.Ip, privilege.ShareName, code)
+			return err
+		}
+		return backoff.Permanent(err)
+	}, b)
+}
+
+func (dsm *DSM) shareNfsPrivilegeSaveOnce(privilege SharePrivilege) (int, error) {
 	params := url.Values{}
 	params.Add("api", "SYNO.Core.FileServ.NFS.SharePrivilege")
 	params.Add("method", "save")
@@ -538,16 +561,16 @@ func (dsm *DSM) shareNfsPrivilegeSaveOnce(privilege SharePrivilege) error {
 
 	js, err := json.Marshal(privilege.Rule)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	params.Add("rule", string(js))
 
-	_, err = dsm.nfsPrivilegeRequest(&struct{}{}, params, nfsPrivilegeRetryTimeout)
+	resp, err := dsm.nfsPrivilegeRequest(&struct{}{}, params, nfsPrivilegeRetryTimeout)
 	if err != nil {
-		return err
+		return resp.ErrorCode, err
 	}
 
-	return nil
+	return 0, nil
 }
 
 // missingPrivilegeRules returns the clients we asked to allow that DSM does not
@@ -622,4 +645,3 @@ func (dsm *DSM) NfsSet(enableV3 bool, enableV4 bool, enabledMinorVer int) error 
 
 	return nil
 }
-

@@ -268,7 +268,7 @@ func (service *DsmService) shareToVolume(dsm *webapi.DSM, share webapi.ShareInfo
 // share. It reports (nil, nil) when no share matched and every DSM could be
 // listed, so the caller may then conclude the volume is not a share at all.
 func (service *DsmService) findSMBorNFSVolume(pred func(webapi.ShareInfo) bool) (volume *models.K8sVolumeRespSpec, listErr error) {
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.snapshotDsms() {
 		if dsm.IsUC() {
 			continue
 		}
@@ -303,7 +303,7 @@ func (service *DsmService) findSMBorNFSVolume(pred func(webapi.ShareInfo) bool) 
 // share that could not be classified as one that no longer exists is what makes
 // DeleteVolume report success without deleting anything.
 func (service *DsmService) listSMBorNFSVolumes(dsmIp string) (infos []*models.K8sVolumeRespSpec, listErr error) {
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.snapshotDsms() {
 		if dsmIp != "" && dsmIp != dsm.Ip {
 			continue
 		}
@@ -357,7 +357,7 @@ func (service *DsmService) listSMBorNFSSnapshotsByDsm(dsm *webapi.DSM) (infos []
 }
 
 func (service *DsmService) getSMBorNFSSnapshot(snapshotUuid string) *models.K8sSnapshotRespSpec {
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.snapshotDsms() {
 		snapshots := service.listSMBorNFSSnapshotsByDsm(dsm)
 		for _, snap := range snapshots {
 			if snap.Uuid == snapshotUuid {
