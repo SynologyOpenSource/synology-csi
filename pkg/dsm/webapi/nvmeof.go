@@ -76,7 +76,7 @@ func sanErrCodeMapping(errCode int, oriErr error) error {
 	}
 
 	if errCode >= 28990000 {
-		return utils.SanDefaultError{errCode}
+		return utils.SanDefaultError{ErrCode: errCode}
 	}
 	return oriErr
 }
