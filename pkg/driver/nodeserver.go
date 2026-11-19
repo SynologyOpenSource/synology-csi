@@ -32,7 +32,6 @@ import (
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/mount-utils"
 
@@ -405,28 +404,6 @@ func (ns *nodeServer) mountSensitiveWithRetry(sourcePath string, targetPath stri
 	return nil
 }
 
-func getNodeAddress(ctx context.Context, client clientset.Interface) ([]string, error) {
-	ips := []string{}
-	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		log.Errorf("Failed to list nodes, err: %v", err)
-		return nil, err
-	}
-
-	for _, node := range nodes.Items {
-		for _, address := range node.Status.Addresses {
-			if address.Type == "InternalIP" {
-				ips = append(ips, address.Address)
-			}
-		}
-	}
-
-	if len(ips) == 0 {
-		return nil, fmt.Errorf("Empty results")
-	}
-	return ips, nil
-}
-
 // force skips the rules-already-present shortcut. DSM regenerates the NFS
 // export table as a side effect of saving, and a mount that fails with "No
 // such file or directory" means this share's export entry is gone even though
@@ -689,12 +666,12 @@ func (ns *nodeServer) nodeStageNFSVolume(ctx context.Context, spec *models.NodeS
 		return nil, status.Error(codes.InvalidArgument, "NFS protocol only allows 'mount' access type")
 	}
 
-	nodeIps, err := getNodeAddress(ctx, ns.Client)
+	clientAddresses, err := ns.Driver.nfsClientAddress.nodeAddresses(ctx, ns.Client)
 	if err != nil {
-		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to get node IPs for NFS privilege setting, err: %v", err))
+		return nil, status.Errorf(codes.Internal, "Failed to discover NFS client addresses: %v", err)
 	}
 
-	if err := ns.setNFSVolumePrivilege(spec.Source, nodeIps, utils.AuthTypeReadWrite, false); err != nil {
+	if err := ns.setNFSVolumePrivilege(spec.Source, clientAddresses, utils.AuthTypeReadWrite, false); err != nil {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to set NFS privilege rule, source: %s, err: %v", spec.Source, err))
 	}
 	return &csi.NodeStageVolumeResponse{}, nil
@@ -885,10 +862,12 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 			// regeneration, then try once more.
 			log.Warnf("NFS server has no export for %s although the share should have one; "+
 				"re-saving its privilege to regenerate the export table and retrying the mount", source)
-			if nodeIps, ipErr := getNodeAddress(ctx, ns.Client); ipErr != nil {
-				log.Errorf("Failed to get node IPs to restore the export of %s: %v", source, ipErr)
-			} else if saveErr := ns.setNFSVolumePrivilege(
-				"//"+server+"/"+path.Base(baseDir), nodeIps, utils.AuthTypeReadWrite, true); saveErr != nil {
+			clientAddresses, discoveryErr := ns.Driver.nfsClientAddress.nodeAddresses(ctx, ns.Client)
+			if discoveryErr != nil {
+				return nil, status.Errorf(codes.Internal, "Failed to discover NFS client addresses to restore the export of %s: %v (mount error: %v)", source, discoveryErr, err)
+			}
+			if saveErr := ns.setNFSVolumePrivilege(
+				"//"+server+"/"+path.Base(baseDir), clientAddresses, utils.AuthTypeReadWrite, true); saveErr != nil {
 				log.Errorf("Failed to re-save the NFS privilege of %s: %v", source, saveErr)
 			} else {
 				err = ns.Mounter.Mount(source, targetPath, "nfs", options)

@@ -36,31 +36,43 @@ var (
 	nvmePath       = ""
 )
 
-var rootCmd = &cobra.Command{
-	Use:          "synology-csi-driver",
-	Short:        "Synology CSI Driver",
-	SilenceUsage: true,
-	RunE: func(_ *cobra.Command, _ []string) error {
-		if webapiDebug {
-			logger.WebapiDebug = true
-			logLevel = "debug"
-		}
-		logger.Init(logLevel)
+func newRootCommand() *cobra.Command {
+	var nfsAddressSource, nfsAnnotationKey string
+	cmd := &cobra.Command{
+		Use:          "synology-csi-driver",
+		Short:        "Synology CSI Driver",
+		SilenceUsage: true,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			nfsAddress, err := driver.NewNFSClientAddressConfig(nfsAddressSource, nfsAnnotationKey)
+			if err != nil {
+				return err
+			}
 
-		if !multipathForUC {
-			driver.MultipathEnabled = false
-		}
+			if webapiDebug {
+				logger.WebapiDebug = true
+				logLevel = "debug"
+			}
+			logger.Init(logLevel)
 
-		err := driverStart()
-		if err != nil {
-			log.Errorf("Failed to driverStart(): %v", err)
-			return err
-		}
-		return nil
-	},
+			if !multipathForUC {
+				driver.MultipathEnabled = false
+			}
+
+			if err := driverStart(nfsAddress); err != nil {
+				log.Errorf("Failed to driverStart(): %v", err)
+				return err
+			}
+			return nil
+		},
+	}
+	cmd.FParseErrWhitelist.UnknownFlags = true
+	addFlags(cmd)
+	cmd.PersistentFlags().StringVar(&nfsAddressSource, "nfs-client-address-source", driver.NFSClientAddressInternalIP, "Kubernetes Node address source for NFS privileges (internalIP or annotation)")
+	cmd.PersistentFlags().StringVar(&nfsAnnotationKey, "nfs-client-address-annotation-key", "", "Kubernetes Node annotation containing the NFS client IP (required in annotation mode)")
+	return cmd
 }
 
-func driverStart() error {
+func driverStart(nfsAddress driver.NFSClientAddressConfig) error {
 	log.Infof("CSI Options = {%s, %s, %s}", csiNodeID, csiEndpoint, csiClientInfoPath)
 
 	dsmService := service.NewDsmService()
@@ -95,7 +107,7 @@ func driverStart() error {
 	tools := driver.NewTools(cmdExecutor)
 
 	// 3. Create and Run the Driver
-	drv, err := driver.NewControllerAndNodeDriver(csiNodeID, csiEndpoint, dsmService, tools)
+	drv, err := driver.NewControllerAndNodeDriverWithConfig(csiNodeID, csiEndpoint, dsmService, tools, nfsAddress)
 	if err != nil {
 		log.Errorf("Failed to create driver: %v", err)
 		return err
@@ -111,10 +123,7 @@ func driverStart() error {
 }
 
 func main() {
-	rootCmd.FParseErrWhitelist.UnknownFlags = true
-	addFlags(rootCmd)
-
-	if err := rootCmd.Execute(); err != nil {
+	if err := newRootCommand().Execute(); err != nil {
 		os.Exit(1)
 	}
 
