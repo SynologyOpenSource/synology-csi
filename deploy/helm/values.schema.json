@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "node": {
+      "type": "object",
+      "properties": {
+        "nfsClientAddress": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source"],
+          "properties": {
+            "source": {
+              "enum": ["internalIP", "annotation"]
+            },
+            "annotationKey": {
+              "type": "string"
+            }
+          },
+          "if": {
+            "properties": {
+              "source": { "const": "annotation" }
+            }
+          },
+          "then": {
+            "required": ["annotationKey"],
+            "properties": {
+              "annotationKey": { "minLength": 1 }
+            }
+          },
+          "else": {
+            "properties": {
+              "annotationKey": { "const": "" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

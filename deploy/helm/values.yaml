@@ -67,6 +67,11 @@ node:
   # If your kubelet path is not standard, specify it here :
   ## example for miocrok8s distrib : /var/snap/microk8s/common/var/lib/kubelet
   kubeletPath: /var/lib/kubelet
+  nfsClientAddress:
+    # Use Kubernetes Node InternalIP addresses or read a Node annotation.
+    source: internalIP
+    # Required when source is annotation.
+    annotationKey: ""
   extraArgs: []
   # - --iscsiadm-path=/usr/local/sbin/iscsiadm
 # Specifies affinity, nodeSelector and tolerations for the snapshotter StatefulSet

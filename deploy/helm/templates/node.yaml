@@ -103,8 +103,25 @@ spec:
             {{- if .plugin.supportChrootDir }}
             - --chroot-dir=/host
             {{- end }}
+            {{- with $.Values.node.nfsClientAddress }}
+            - {{ printf "--nfs-client-address-source=%s" .source | quote }}
+            {{- if eq .source "annotation" }}
+            {{- range $.Values.node.extraArgs }}
+            {{- if regexMatch "^--nfs-client-address-(source|annotation-key)(=|$)" (toString .) }}
+            {{- fail "configure NFS client addresses with either node.nfsClientAddress or node.extraArgs" }}
+            {{- end }}
+            {{- end }}
+            {{- $key := lower .annotationKey }}
+            {{- $dnsLabel := "[a-z0-9]([-a-z0-9]*[a-z0-9])?" }}
+            {{- $keyPattern := printf "^(%s(\\.%s)*/)?[a-z0-9]([-_.a-z0-9]{0,61}[a-z0-9])?$" $dnsLabel $dnsLabel }}
+            {{- if or (regexMatch "^[^/]{254}" $key) (not (regexMatch $keyPattern $key)) }}
+            {{- fail "node.nfsClientAddress.annotationKey must be a valid Kubernetes annotation key" }}
+            {{- end }}
+            - {{ printf "--nfs-client-address-annotation-key=%s" .annotationKey | quote }}
+            {{- end }}
+            {{- end }}
             {{- with $.Values.node.extraArgs }}
-            {{ toYaml . }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           env:
             - name: CSI_ENDPOINT
