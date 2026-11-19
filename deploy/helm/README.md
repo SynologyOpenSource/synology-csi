@@ -66,6 +66,38 @@ It's a good practice to create a dedicated user for accessing the Diskstation Ma
 Your user needs to be a member of the `administrators` group and have permission to access the `DSM` application.
 You can reject any other permissions.
 
+### Selecting NFS client addresses
+
+The default configuration uses Kubernetes Node `InternalIP` addresses.
+
+```yaml
+node:
+  nfsClientAddress:
+    source: internalIP
+    annotationKey: ""
+```
+
+Set `source` to `annotation` and supply the annotation key when the NFS client
+uses a dedicated storage address.
+
+```yaml
+node:
+  nfsClientAddress:
+    source: annotation
+    annotationKey: storage.example.org/nfs-client-ip
+```
+
+Use a driver image that supports these options. Set `images.plugin.image` and
+`images.plugin.tag` when using a custom image. The chart passes the settings to
+the node DaemonSet's `csi-plugin` container and appends existing
+`node.extraArgs`. With structured annotation configuration, use
+`node.extraArgs` for other driver flags.
+
+For Node annotation examples, validation, and rollout steps, see
+[Configuring NFS client addresses](../../README.md#configuring-nfs-client-addresses).
+Run `helm lint deploy/helm` and `go test -count=1 ./test/helm` from the
+repository root to check the chart locally.
+
 ## Local Development
 
 ### Installing the Chart from Source

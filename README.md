@@ -226,6 +226,109 @@ Create and apply StorageClasses with the properties you want.
     kubectl apply -f <storageclass_yaml>
     ```
 
+### Configuring NFS client addresses
+
+DSM matches each NFS request against the source address it receives. On a
+multi-homed worker, NFS traffic can take a storage network whose source address
+differs from the Kubernetes Node's `InternalIP`.
+
+The node plugin accepts these options in the node DaemonSet's `csi-plugin`
+container. Helm users can set the equivalent [chart values](deploy/helm/README.md#selecting-nfs-client-addresses).
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--nfs-client-address-source` | `internalIP` | Use Kubernetes Node `InternalIP` addresses or select `annotation`. |
+| `--nfs-client-address-annotation-key` | Empty | In `annotation` mode, supply a Kubernetes annotation key. |
+
+Existing installations can continue using the default without changing Node
+metadata or StorageClasses. To use a dedicated storage address, configure the
+node plugin with both arguments.
+
+```text
+--nfs-client-address-source=annotation
+--nfs-client-address-annotation-key=storage.example.org/nfs-client-ip
+```
+
+Set that key in the metadata of each Kubernetes **Node**.
+
+```yaml
+apiVersion: v1
+kind: Node
+metadata:
+  name: example-worker-1
+  annotations:
+    storage.example.org/nfs-client-ip: "192.0.2.21"
+```
+
+```sh
+kubectl annotate node example-worker-2 storage.example.org/nfs-client-ip=192.0.2.22
+```
+
+The driver lists all Node objects, including tainted and unschedulable Nodes.
+DaemonSet scheduling settings govern where the plugin runs. Populate the
+annotation on every Node before enabling `annotation` mode, and verify that the
+configured address is appropriate for every NAS the Node uses for NFS.
+
+Each annotation accepts one unscoped unicast IPv4 or IPv6 address, including
+private addresses. The driver trims surrounding whitespace and canonicalizes
+addresses, converting IPv4-mapped IPv6 addresses to IPv4. It sorts the distinct
+addresses and writes one rule per address. CIDRs, hostnames, wildcards, lists,
+ports, scope identifiers, and unspecified, loopback, link-local, limited
+broadcast or multicast addresses fail validation. Missing or invalid annotations
+stop the operation before a DSM privilege write. The error identifies the Node
+and the annotation key. An empty Node list also fails discovery.
+
+IPv6 client addresses use the same DSM privilege API field as IPv4. The driver
+tests cover IPv6 discovery and the API payload using a fake DSM. Verify your DSM
+version's rule handling and the NFS transport in your environment.
+[Synology's IPv6 service documentation](https://kb.synology.com/en-global/DSM/tutorial/What_applications_on_Synology_NAS_are_IPv6_supported)
+
+Restrict writes to the selected annotation to trusted cluster administrators and
+trusted automation, using admission policy where needed. Authorizing an address
+also authorizes clients whose traffic is translated to that same source address.
+Discovery uses the node plugin's existing Kubernetes permission to list Nodes.
+
+#### Node and volume lifecycle
+
+The driver reads the current Node list and annotations on each NFS stage and
+when recovering a missing export during publish. When kubelet stages an existing
+volume on a newly joined Node, the driver adds any missing address rules before
+the mount. Set the annotation before making the Node available to workloads.
+
+Staging skips a DSM save when current rules already grant the requested access
+to all discovered addresses. A save sends the full discovered rule list for the
+share. An annotation change that requires a new rule can replace the old rule
+on the next stage. A removed Node's rule can persist while the remaining
+addresses are already authorized. Audit and remove stale rules in DSM when
+revocation is required. A running mount, Node label change, or CSI plugin
+restart alone does not trigger privilege reconciliation. Missing-export
+recovery forces a save and retries the mount. Concurrent stages or recoveries
+can still race with other DSM privilege writers.
+
+#### Migration and troubleshooting
+
+1. On each Node, check the route to the NAS and use the `src` address that DSM
+   will see. If the path uses NAT, verify the translated source at DSM.
+
+   ```sh
+   ip route get 192.0.2.100
+   kubectl get node example-worker-1 -o yaml
+   ```
+
+2. Populate the annotations, then roll out an image that supports the flags and
+   apply the same address configuration to every node plugin. Coordinate the
+   rollout with NFS workloads when switching networks. Plugins using different
+   address sources can overwrite each other's rules for the same share.
+3. During a maintenance window, mount an existing NFS volume on a Node that has
+   yet to stage it. Inspect the affected node plugin's `csi-plugin` logs and the
+   share's **NFS Permissions** in DSM. Check that the rule allows the address
+   selected by the Node's route.
+   [Assign NFS Permissions](https://kb.synology.com/en-global/DSM/help/DSM/AdminCenter/file_share_privilege_nfs)
+4. To roll back, verify that the Node `InternalIP` addresses match the sources
+   DSM will see. Select `internalIP` and clear the annotation key. Remove both
+   CLI flags before downgrading the image. Restage affected volumes when safe
+   and review their DSM rules, including any stale entries.
+
 ### Creating Volume Snapshot Classes
 Create and apply VolumeSnapshotClasses with the properties you want.
 
