@@ -3,7 +3,7 @@ kind: CSIDriver
 metadata:
   name: csi.san.synology.com
 spec:
-  attachRequired: true # Indicates the driver requires an attach operation (TODO: ControllerPublishVolume should be implemented)
+  attachRequired: true # Indicates the driver requires an attach operation (ControllerPublishVolume is a no-op, but it keeps a VolumeAttachment until the node has unstaged)
   podInfoOnMount: true
   volumeLifecycleModes:
     - Persistent

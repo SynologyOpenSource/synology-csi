@@ -72,6 +72,9 @@ func NewControllerAndNodeDriver(nodeID string, endpoint string, dsmService inter
 		csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS,
 		csi.ControllerServiceCapability_RPC_CLONE_VOLUME,
 		csi.ControllerServiceCapability_RPC_GET_CAPACITY,
+		// Both RPCs are no-ops, but advertising them is what makes the CSI sidecars
+		// keep a VolumeAttachment until the node has unstaged, see ControllerPublishVolume.
+		csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME,
 	})
 
 	d.addVolumeCapabilityAccessModes([]csi.VolumeCapability_AccessMode_Mode{

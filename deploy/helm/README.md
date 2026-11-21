@@ -42,6 +42,20 @@ To uninstall the chart:
 
     helm delete <release-name>
 
+### Upgrading
+
+The driver now advertises the `PUBLISH_UNPUBLISH_VOLUME` capability.
+The `csi-provisioner` and `csi-attacher` sidecars only detect the capabilities of the driver when they start, so they
+must be restarted after upgrading from an earlier version; until then they behave as before.
+`helm upgrade` replaces the controller pod when the driver image changes, which restarts the sidecars.
+If the release is upgraded without a new driver image, restart the controller StatefulSet manually:
+
+    kubectl rollout restart statefulset/<fullname>-controller -n <namespace>
+
+VolumeAttachments created before the upgrade are not retrofitted: they were made without the capability, so the
+sidecars do not hold them back.
+That is acceptable because, once restarted, `csi-provisioner` checks for VolumeAttachments before it deletes a volume.
+
 ### Customizing the Configuration
 
 As usual with Helm, you can override the values in the file [`values.yaml`](values.yaml) to suit your requirements - see

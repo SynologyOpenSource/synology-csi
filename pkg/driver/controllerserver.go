@@ -281,6 +281,11 @@ func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 	}
 
 	if err := cs.dsmService.DeleteVolume(volumeId); err != nil {
+		// Keep the code the service chose. FailedPrecondition in particular means
+		// "still in use, retry later", which Internal would blur into a real failure.
+		if st, ok := status.FromError(err); ok && st.Code() == codes.FailedPrecondition {
+			return nil, err
+		}
 		return nil, status.Errorf(codes.Internal,
 			fmt.Sprintf("Failed to DeleteVolume(%s), err: %v", volumeId, err))
 	}
@@ -288,12 +293,69 @@ func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 	return &csi.DeleteVolumeResponse{}, nil
 }
 
+// ControllerPublishVolume has nothing to attach: the node logs in to the iSCSI
+// or NVMe target, or mounts the share, itself in NodeStageVolume. The RPC is
+// advertised anyway because that is what makes the CSI sidecars track
+// attachments. The attach/detach controller creates a VolumeAttachment for every
+// volume of a driver with attachRequired, but external-attacher only puts its
+// finalizer on it, and so holds it back until the volume is unpublished, for
+// drivers that advertise PUBLISH_UNPUBLISH_VOLUME. external-provisioner likewise
+// only checks for VolumeAttachments before DeleteVolume for those drivers.
+// Without the capability, a PVC deleted together with its pod reaches
+// DeleteVolume while the node is still logged in.
+//
+// The driver does not track which node a volume is published to, and does not
+// refuse a second node for the single-node access modes. Doing so would need
+// state that survives a restart, and the Kubernetes attach/detach controller
+// already refuses to attach a ReadWriteOnce volume to a second node. What this
+// RPC is for is making the sidecars wait for the VolumeAttachment to go away,
+// and therefore for NodeUnstageVolume, before DeleteVolume.
 func (cs *controllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
+	volumeId, nodeId, volCap := req.GetVolumeId(), req.GetNodeId(), req.GetVolumeCapability()
+	if volumeId == "" {
+		return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
+	}
+	if nodeId == "" {
+		return nil, status.Error(codes.InvalidArgument, "Node ID missing in request")
+	}
+	if volCap == nil {
+		return nil, status.Error(codes.InvalidArgument, "No volume capability is provided")
+	}
+	if !cs.isVolumeAccessModeSupport(volCap.GetAccessMode().GetMode()) {
+		return nil, status.Errorf(codes.InvalidArgument, "Driver does not support volume capability:%v", volCap)
+	}
+	if volCap.GetMount() == nil && volCap.GetBlock() == nil {
+		return nil, status.Error(codes.InvalidArgument, "Volume capability must specify either mount or block access type")
+	}
+
+	k8sVolume, err := cs.dsmService.GetVolume(volumeId)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable,
+			"Couldn't determine whether volume[%s] exists: %v", volumeId, err)
+	}
+	if k8sVolume == nil {
+		return nil, status.Errorf(codes.NotFound, "Volume[%s] does not exist", volumeId)
+	}
+
+	if volCap.GetBlock() != nil && isShareProtocol(k8sVolume.Protocol) {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"%s protocol does not support volumeMode: Block; use volumeMode: Filesystem instead",
+			strings.ToUpper(k8sVolume.Protocol))
+	}
+
+	return &csi.ControllerPublishVolumeResponse{}, nil
 }
 
+// ControllerUnpublishVolume has nothing to detach, see ControllerPublishVolume.
+// The spec requires success for a volume or node that is already gone, so it
+// does not look either up: a missing volume must not hold up the VolumeAttachment
+// cleanup that lets the PV be released.
 func (cs *controllerServer) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
+	if req.GetVolumeId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
+	}
+
+	return &csi.ControllerUnpublishVolumeResponse{}, nil
 }
 
 func (cs *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req *csi.ValidateVolumeCapabilitiesRequest) (*csi.ValidateVolumeCapabilitiesResponse, error) {
