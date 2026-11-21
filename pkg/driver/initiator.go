@@ -50,12 +50,16 @@ const (
 
 type tools struct {
 	executor hostexec.Executor
+	// local runs commands in the plugin container itself, for tools that only
+	// need the device nodes shared through /dev and not the host's userspace.
+	local hostexec.Executor
 }
 
 // NewTools creates a new tools wrapper for calling utilities with given executor
 func NewTools(executor hostexec.Executor) tools {
 	return tools{
 		executor: executor,
+		local:    utilexec.New(),
 	}
 }
 
@@ -188,8 +192,13 @@ func (t *tools) iscsiadm_delete_node(iqn string, portal string) error {
 // leaves the write racing the next node's read. The in-tree iSCSI plugin does
 // the same thing on its detach path. It is a no-op on a device that is already
 // clean.
+//
+// It runs in the plugin container rather than through the host executor, as
+// lsblk does: BLKFLSBUF is an ioctl on the device node, which the container
+// shares through /dev, so nothing about the host's userspace is needed, and
+// some hosts (Talos Linux) have no blockdev binary to chroot into.
 func (t *tools) blockdev_flushbufs(devPath string) error {
-	cmd := t.executor.Command("blockdev", "--flushbufs", devPath)
+	cmd := t.local.Command("blockdev", "--flushbufs", devPath)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s (%v)", string(out), err)
 	}

@@ -273,6 +273,20 @@ func TestHostexec_wrap(t *testing.T) {
 			},
 		},
 		{
+			// env runs outside the chroot, so the host needs no /usr/bin/env
+			// (Talos); chroot looks the command up inside the new root.
+			name:    "chroot with bare command",
+			cmd:     "iscsiadm",
+			args:    []string{"-m", "session"},
+			chroot:  "/host",
+			cmdMap:  nil,
+			wantCmd: "/usr/bin/env",
+			wantArgs: []string{
+				"-i", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+				"/usr/sbin/chroot", "/host", "iscsiadm", "-m", "session",
+			},
+		},
+		{
 			name:    "chain wrappers",
 			cmd:     "echo",
 			args:    []string{"hello", "world"},

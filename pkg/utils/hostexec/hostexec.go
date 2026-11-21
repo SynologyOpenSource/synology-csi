@@ -62,11 +62,14 @@ func (h *hostexec) wrapEnv(cmd string, args ...string) (string, []string) {
 		return cmd, args
 	}
 
-	sp := fmt.Sprintf("PATH=%s", strings.Join(defaultSearchPath, ":"))
-	args = append([]string{"-i", sp, cmd}, args...)
-	cmd = "/usr/bin/env"
+	return envCommand(cmd, args...)
+}
 
-	return cmd, args
+// envCommand runs cmd through env with an empty environment and PATH set to
+// defaultSearchPath.
+func envCommand(cmd string, args ...string) (string, []string) {
+	sp := fmt.Sprintf("PATH=%s", strings.Join(defaultSearchPath, ":"))
+	return "/usr/bin/env", append([]string{"-i", sp, cmd}, args...)
 }
 
 func (h *hostexec) wrapChroot(cmd string, args ...string) (string, []string) {
@@ -80,10 +83,29 @@ func (h *hostexec) wrapChroot(cmd string, args ...string) (string, []string) {
 	return cmd, args
 }
 
+// wrap builds the final command line. A bare command name is looked up in
+// defaultSearchPath with a clean environment, through the container's own env
+// placed outside the chroot:
+//
+//	/usr/bin/env -i PATH=... /usr/sbin/chroot <dir> <cmd> <args>
+//
+// chroot then finds <cmd> with execvp inside the new root. Running env inside
+// the chroot instead (chroot <dir> /usr/bin/env -i ...) required the host to
+// have /usr/bin/env, which Talos Linux does not: its root filesystem carries
+// no coreutils, and iscsiadm comes from the iscsi-tools system extension at
+// /usr/local/sbin/iscsiadm. The resulting environment and PATH lookup are the
+// same either way.
 func (h *hostexec) wrap(cmd string, args ...string) (string, []string) {
 	cmd, args = h.resolveCmd(cmd, args...)
-	cmd, args = h.wrapEnv(cmd, args...)
+	if h.chrootDir == "" {
+		return h.wrapEnv(cmd, args...)
+	}
+
+	bare := !strings.ContainsAny(cmd, "/")
 	cmd, args = h.wrapChroot(cmd, args...)
+	if bare {
+		cmd, args = envCommand(cmd, args...)
+	}
 
 	return cmd, args
 }
