@@ -119,7 +119,8 @@ func TestLogoutSucceedsWhenTheRecordCannotBeRemoved(t *testing.T) {
 
 func TestFlushWritesOutTheDeviceBeforeItGoesAway(t *testing.T) {
 	e := &recordingExecutor{}
-	tools := NewTools(e)
+	tools := NewTools(&recordingExecutor{})
+	tools.local = e
 
 	if err := tools.blockdev_flushbufs("/dev/sdx"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -131,7 +132,8 @@ func TestFlushWritesOutTheDeviceBeforeItGoesAway(t *testing.T) {
 
 func TestFlushReportsFailure(t *testing.T) {
 	e := &recordingExecutor{fail: "flushbufs"}
-	tools := NewTools(e)
+	tools := NewTools(&recordingExecutor{})
+	tools.local = e
 
 	if err := tools.blockdev_flushbufs("/dev/sdx"); err == nil {
 		t.Error("expected an error when the flush fails; silently continuing to logout " +
