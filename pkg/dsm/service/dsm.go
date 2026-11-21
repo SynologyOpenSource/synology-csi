@@ -709,6 +709,54 @@ func (service *DsmService) CreateVolume(spec *models.CreateK8sVolumeSpec) (*mode
 	return nil, status.Errorf(codes.Internal, fmt.Sprintf("Couldn't find any host available to create Volume"))
 }
 
+// checkTargetNotInUse refuses to delete a LUN that an initiator is still logged
+// in to. DSM removes the LUN regardless, which leaves the node with a mounted
+// filesystem on a device that fails every request ("Logical unit not supported")
+// and a session that nothing will ever log out. FailedPrecondition makes the
+// caller retry with backoff, by which time NodeUnstageVolume has normally logged
+// out. Any session counts, so each portal of a multipath volume is covered.
+func checkTargetNotInUse(volId string, target webapi.TargetInfo) error {
+	if len(target.ConnectedSessions) == 0 {
+		return nil
+	}
+
+	sessions := make([]string, 0, len(target.ConnectedSessions))
+	for _, session := range target.ConnectedSessions {
+		sessions = append(sessions, fmt.Sprintf("%s (%s)", session.Iqn, session.Ip))
+	}
+	return status.Errorf(codes.FailedPrecondition,
+		"Volume[%s] is still in use, target[%s] has %d connected session(s): %s",
+		volId, target.Name, len(sessions), strings.Join(sessions, ", "))
+}
+
+// checkLunNotInUse applies checkTargetNotInUse to every target the LUN is mapped
+// to. A LUN can be mapped to several targets, and the volume looked up by
+// GetVolume only carries one of them, so the targets are listed afresh here,
+// right before the delete, rather than trusting that copy: it may be stale, and
+// it may be the idle one of two mappings. If the targets cannot be listed the
+// answer is Unavailable, never "not in use", so the LUN is not deleted blind.
+func checkLunNotInUse(dsm *webapi.DSM, volId, lunUuid string) error {
+	targets, err := dsm.TargetList()
+	if err != nil {
+		return status.Errorf(codes.Unavailable,
+			"Couldn't list the targets of DSM[%s] to check whether volume[%s] is still in use, not deleting: %v",
+			dsm.Ip, volId, err)
+	}
+
+	for _, target := range targets {
+		for _, mapping := range target.MappedLuns {
+			if mapping.LunUuid != lunUuid {
+				continue
+			}
+			if err := checkTargetNotInUse(volId, target); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	return nil
+}
+
 func (service *DsmService) DeleteVolume(volId string) error {
 	k8sVolume, err := service.GetVolume(volId)
 	if err != nil {
@@ -755,6 +803,10 @@ func (service *DsmService) DeleteVolume(volId string) error {
 		}
 	} else {
 		lun, target := k8sVolume.Lun, k8sVolume.Target
+
+		if err := checkLunNotInUse(dsm, volId, lun.Uuid); err != nil {
+			return err
+		}
 
 		if err := dsm.LunDelete(lun.Uuid); err != nil {
 			if  _, err := dsm.LunGet(lun.Uuid); err != nil && errors.Is(err, utils.NoSuchLunError("")) {

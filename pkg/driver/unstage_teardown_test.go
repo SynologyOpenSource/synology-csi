@@ -19,6 +19,10 @@ type recordingExecutor struct {
 	// fail makes any command whose joined form contains this substring return
 	// an error.
 	fail string
+	// failErr is the error a failing command returns; a plain error if nil.
+	failErr error
+	// failOut is the output a failing command prints; "boom" if empty.
+	failOut string
 	// sessionOutput is what `iscsiadm -m session` reports.
 	sessionOutput string
 }
@@ -36,7 +40,15 @@ func (e *recordingExecutor) Command(cmd string, args ...string) utilexec.Cmd {
 		CombinedOutputScript: []testingexec.FakeAction{
 			func() ([]byte, []byte, error) {
 				if e.fail != "" && strings.Contains(line, e.fail) {
-					return []byte("boom"), nil, fmt.Errorf("command failed")
+					err := e.failErr
+					if err == nil {
+						err = fmt.Errorf("command failed")
+					}
+					failOut := e.failOut
+					if failOut == "" {
+						failOut = "boom"
+					}
+					return []byte(failOut), nil, err
 				}
 				return []byte(out), nil, nil
 			},
@@ -109,11 +121,58 @@ func TestNodeRecordIsRemovedEvenWithNoSession(t *testing.T) {
 	}
 }
 
-// Detaching succeeded; a leftover record is noise, not a failure to report.
-func TestLogoutSucceedsWhenTheRecordCannotBeRemoved(t *testing.T) {
+// A record that cannot be removed keeps iscsid retrying the login, so the
+// unstage is reported as failed and kubelet calls again.
+func TestLogoutReportsAFailedRecordRemoval(t *testing.T) {
 	e := &recordingExecutor{sessionOutput: sessionLine(testIqn), fail: "-o delete"}
+	if err := newTestInitiator(e).logout(testIqn, "1.2.3.4"); err == nil {
+		t.Error("a record that could not be removed should fail the logout")
+	}
+}
+
+// There being no record to remove is what the cleanup wants, not a failure.
+func TestLogoutIgnoresAMissingRecord(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		out  string
+	}{
+		{"exit status 21", testingexec.FakeExitError{Status: 21}, "iscsiadm: No records found"},
+		{"output only", nil, "iscsiadm: No records found"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := &recordingExecutor{sessionOutput: sessionLine(testIqn), fail: "-o delete", failErr: tt.err, failOut: tt.out}
+			if err := newTestInitiator(e).logout(testIqn, "1.2.3.4"); err != nil {
+				t.Errorf("a missing node record should not fail the logout, got %v", err)
+			}
+		})
+	}
+}
+
+// Not being able to list the sessions is not the same as having none: reading
+// it as none would skip the logout and report the volume unstaged.
+func TestLogoutReportsASessionListingFailure(t *testing.T) {
+	e := &recordingExecutor{fail: "-m session"}
+	if err := newTestInitiator(e).logout(testIqn, "1.2.3.4"); err == nil {
+		t.Fatal("expected an error when the sessions cannot be listed")
+	}
+	if e.find("--logout") >= 0 || e.find("-o delete") >= 0 {
+		t.Errorf("expected neither a logout nor a record removal, ran: %v", e.ran)
+	}
+}
+
+// iscsiadm exits with 21 when there are no sessions, which is a normal state.
+func TestLogoutTreatsNoActiveSessionsAsEmpty(t *testing.T) {
+	e := &recordingExecutor{fail: "-m session", failErr: testingexec.FakeExitError{Status: 21}, failOut: "iscsiadm: No active sessions."}
 	if err := newTestInitiator(e).logout(testIqn, "1.2.3.4"); err != nil {
-		t.Errorf("a record that could not be removed should not fail the unstage, got %v", err)
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if e.find("--logout") >= 0 {
+		t.Errorf("did not expect a logout with no sessions, ran: %v", e.ran)
+	}
+	if e.find("-o delete") < 0 {
+		t.Errorf("expected the node record to be removed, ran: %v", e.ran)
 	}
 }
 
