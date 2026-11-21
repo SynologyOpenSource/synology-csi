@@ -18,7 +18,9 @@ package driver
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -49,12 +51,25 @@ type nodeServer struct {
 	Initiator  *initiatorDriver
 	Client     clientset.Interface
 	tools      tools
+
+	// stageRecords holds what NodeUnstageVolume needs to tear down a volume DSM
+	// no longer knows about.
+	stageRecords stageRecords
+	// volumeLocks keeps stage, unstage, publish and unpublish of a volume from
+	// running at the same time.
+	volumeLocks volumeLocks
 }
 
+// vars so tests need not wait out the real timings.
+var (
+	devicePathPollInterval = 1 * time.Second
+	devicePathTimeout      = 20 * time.Second
+)
+
 func waitForDevicePathToExist(path string) error {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(devicePathPollInterval)
 	defer ticker.Stop()
-	timer := time.NewTimer(20 * time.Second)
+	timer := time.NewTimer(devicePathTimeout)
 	defer timer.Stop()
 
 	for {
@@ -78,7 +93,11 @@ func waitForDevicePathToExist(path string) error {
 func (t *tools) getExistedVolumeMountPath(targetIqn string, mappingIndex int) string {
 	paths := []string{}
 
-	sessions := t.listSessionsByIqn(targetIqn)
+	sessions, err := t.listSessionsByIqn(targetIqn)
+	if err != nil {
+		log.Errorf("Couldn't list the sessions of target[%s] to find its device: %v", targetIqn, err)
+		return ""
+	}
 	for _, session := range sessions {
 		paths = append(paths, fmt.Sprintf("%sip-%s-iscsi-%s-lun-%d", "/dev/disk/by-path/", session.Portal, targetIqn, mappingIndex))
 	}
@@ -273,7 +292,11 @@ func (ns *nodeServer) logoutNVMeSubsystem(nqn string) {
 // loginTarget logs the node in to the volume's target and returns the by-path
 // device links, along with the target IQN and LUN number they are supposed to
 // stand for -- the caller is expected to verify that before trusting them.
-func (ns *nodeServer) loginTarget(volumeId string) (paths []string, iqn string, lun int, err error) {
+//
+// If given, targetKnown is called with the target and LUN before the first
+// login is attempted, so that a caller can note down what the node may end up
+// logged in to even if this fails halfway.
+func (ns *nodeServer) loginTarget(volumeId string, targetKnown func(iqn string, lun int)) (paths []string, iqn string, lun int, err error) {
 	k8sVolume, err := ns.dsmService.GetVolume(volumeId)
 	if err != nil {
 		return nil, "", 0, status.Errorf(codes.Unavailable,
@@ -291,6 +314,9 @@ func (ns *nodeServer) loginTarget(volumeId string) (paths []string, iqn string, 
 	// Assume target and lun 1-1 mapping
 	iqn = k8sVolume.Target.Iqn
 	lun = k8sVolume.Target.MappedLuns[0].MappingIndex
+	if targetKnown != nil {
+		targetKnown(iqn, lun)
+	}
 	for _, portal := range portals {
 		if err := ns.Initiator.login(iqn, portal); err != nil {
 			return nil, "", 0, status.Errorf(codes.Internal,
@@ -309,14 +335,11 @@ func (ns *nodeServer) loginTarget(volumeId string) (paths []string, iqn string, 
 	return paths, iqn, lun, nil
 }
 
-func (ns *nodeServer) logoutTarget(k8sVolume *models.K8sVolumeRespSpec) {
-	if k8sVolume == nil {
-		return
-	}
-
-	// Assume target and lun 1-1 mapping
-	mappingIndex := k8sVolume.Target.MappedLuns[0].MappingIndex
-	volumeMountPath := ns.tools.getExistedVolumeMountPath(k8sVolume.Target.Iqn, mappingIndex)
+// logoutTarget flushes the volume's device, if it can still be found, and logs
+// the node out of the target. It takes the pieces rather than the volume
+// because NodeUnstageVolume also runs it for volumes DSM no longer has.
+func (ns *nodeServer) logoutTarget(iqn string, mappingIndex int) error {
+	volumeMountPath := ns.tools.getExistedVolumeMountPath(iqn, mappingIndex)
 
 	// Push anything still in the page cache out to the LUN before the session
 	// goes away. A filesystem volume was already flushed by the Unmount above,
@@ -330,7 +353,7 @@ func (ns *nodeServer) logoutTarget(k8sVolume *models.K8sVolumeRespSpec) {
 	if volumeMountPath == "" {
 		log.Warnf("No device path resolved for target[%s], skipping the pre-logout flush; "+
 			"anything still in the page cache will not reach the LUN",
-			k8sVolume.Target.Iqn)
+			iqn)
 	} else if err := ns.tools.fsyncDevice(volumeMountPath); err != nil {
 		log.Errorf("Failed to fsync device %s before logout, its last writes may only exist in the DSM's memory: %v",
 			volumeMountPath, err)
@@ -338,7 +361,7 @@ func (ns *nodeServer) logoutTarget(k8sVolume *models.K8sVolumeRespSpec) {
 		log.Errorf("Failed to flush device %s before logout, its last writes may not have reached the LUN: %v",
 			volumeMountPath, err)
 	} else {
-		log.Infof("Flushed device %s before logout of target[%s]", volumeMountPath, k8sVolume.Target.Iqn)
+		log.Infof("Flushed device %s before logout of target[%s]", volumeMountPath, iqn)
 	}
 
 	if strings.Contains(volumeMountPath, "/dev/mapper") && ns.tools.IsMultipathEnabled() {
@@ -347,7 +370,7 @@ func (ns *nodeServer) logoutTarget(k8sVolume *models.K8sVolumeRespSpec) {
 		}
 	}
 
-	ns.Initiator.logout(k8sVolume.Target.Iqn, k8sVolume.DsmIp)
+	return ns.Initiator.logout(iqn)
 }
 
 // XFS refuses to mount a filesystem whose UUID is already in use on the host.
@@ -580,13 +603,119 @@ func (ns *nodeServer) growFilesystemIfNeeded(devicePath, mountPath string) error
 	return nil
 }
 
+// stageAttempt is what one stage call has done that a failure has to undo.
+type stageAttempt struct {
+	// iqn and lun are the target of the volume once DSM has named it; empty iqn
+	// means the stage never got as far as a login.
+	iqn string
+	lun int
+	// sessionBefore is whether the node was already logged in to the target when
+	// this call started, or whether that could not be told. Such a session is not
+	// this call's to end: another volume's stage may be using the target, and the
+	// volume lock only serializes the operations on one volume.
+	sessionBefore bool
+	// mounted is whether this call mounted the staging path.
+	mounted bool
+}
+
 func (ns *nodeServer) nodeStageISCSIVolume(ctx context.Context, spec *models.NodeStageVolumeSpec) (*csi.NodeStageVolumeResponse, error) {
 	// if block mode, skip mount
 	if spec.VolumeCapability.GetBlock() != nil {
 		return &csi.NodeStageVolumeResponse{}, nil
 	}
 
-	iscsiDevPaths, iqn, lun, err := ns.loginTarget(spec.VolumeId)
+	attempt := &stageAttempt{}
+	resp, err := ns.stageISCSIVolume(spec, attempt)
+	if err != nil {
+		ns.rollbackFailedStage(spec, attempt)
+	}
+	return resp, err
+}
+
+// rollbackFailedStage undoes what a failed stage left behind. kubelet takes an
+// error from NodeStageVolume other than a retryable one as final and does not
+// necessarily call NodeUnstageVolume afterwards, so nothing may be left for an
+// unstage to clean up.
+//
+// When anything cannot be undone the stage record is kept, which is what lets a
+// later unstage finish the job even once DSM has lost the volume.
+func (ns *nodeServer) rollbackFailedStage(spec *models.NodeStageVolumeSpec, a *stageAttempt) {
+	if a.iqn == "" {
+		return
+	}
+	volumeId := spec.VolumeId
+
+	if a.mounted {
+		if err := ns.Mounter.Interface.Unmount(spec.StagingTargetPath); err != nil {
+			log.Warnf("Keeping the stage record of volume[%s]; couldn't unmount %s after its stage failed: %v",
+				volumeId, spec.StagingTargetPath, err)
+			return
+		}
+	}
+
+	if a.sessionBefore {
+		log.Infof("Keeping the stage record of volume[%s]; the node was already logged in to target[%s] "+
+			"(or that couldn't be told) before the stage, so it is not ended here", volumeId, a.iqn)
+		return
+	}
+
+	loggedIn, err := ns.tools.hasSession(a.iqn, "")
+	if err != nil {
+		log.Warnf("Keeping the stage record of volume[%s]; can't tell whether it is still logged in to target[%s]: %v",
+			volumeId, a.iqn, err)
+		return
+	}
+	if loggedIn {
+		// The session is this call's own, made by the login that went on to fail.
+		err = ns.logoutTarget(a.iqn, a.lun)
+	} else {
+		// No session does not mean nothing was left: the discovery before the login
+		// has already filed a node record for the target, and iscsid would retry the
+		// login from it for good.
+		err = ns.tools.iscsiadm_delete_node(a.iqn)
+	}
+	if err != nil {
+		log.Warnf("Keeping the stage record of volume[%s]; couldn't undo the login to target[%s] after its stage failed: %v",
+			volumeId, a.iqn, err)
+		return
+	}
+
+	if err := ns.stageRecords.remove(volumeId); err != nil {
+		log.Warnf("Couldn't remove the stage record of volume[%s] after its stage failed: %v", volumeId, err)
+	}
+}
+
+// stageISCSIVolume does the work of staging a filesystem volume. It notes in
+// attempt what it has done that would have to be undone if it fails.
+func (ns *nodeServer) stageISCSIVolume(spec *models.NodeStageVolumeSpec, attempt *stageAttempt) (*csi.NodeStageVolumeResponse, error) {
+	// Run before the login, not after: a stage that fails from the login onwards
+	// can still leave the node logged in, and kubelet may well never unstage it.
+	//
+	// Not being able to write the record is not a reason to refuse the volume. It
+	// only matters in the rare case of a volume that disappears from DSM before it
+	// is unstaged.
+	targetKnown := func(iqn string, lun int) {
+		attempt.iqn, attempt.lun = iqn, lun
+
+		had, err := ns.tools.hasSession(iqn, "")
+		if err != nil {
+			log.Warnf("Can't tell whether the node is already logged in to target[%s] of volume[%s], "+
+				"so a failed stage will not end its session: %v", iqn, spec.VolumeId, err)
+		}
+		attempt.sessionBefore = had || err != nil
+
+		if err := ns.stageRecords.write(iscsiStageRecord{
+			VolumeId:     spec.VolumeId,
+			Iqn:          iqn,
+			MappingIndex: lun,
+		}); err != nil {
+			log.Warnf("Couldn't record target[%s] of volume[%s] at %s; if DSM loses the volume before it is unstaged, "+
+				"this node will stay logged in to the target: %v",
+				iqn, spec.VolumeId, ns.stageRecords.path(spec.VolumeId), err)
+		}
+	}
+
+	iscsiDevPaths, iqn, lun, err := ns.loginTarget(spec.VolumeId, targetKnown)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -618,6 +747,7 @@ func (ns *nodeServer) nodeStageISCSIVolume(ctx context.Context, spec *models.Nod
 	if err = ns.Mounter.FormatAndMountSensitiveWithFormatOptions(volumeMountPath, spec.StagingTargetPath, fsType, options, nil, formatOptions); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
+	attempt.mounted = true
 
 	if err := ns.growFilesystemIfNeeded(volumeMountPath, spec.StagingTargetPath); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
@@ -765,6 +895,11 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		FormatOptions:     req.VolumeContext["formatOptions"],
 	}
 
+	if !ns.volumeLocks.tryAcquire(volumeId) {
+		return nil, status.Errorf(codes.Aborted, "An operation on volume[%s] is already in progress", volumeId)
+	}
+	defer ns.volumeLocks.release(volumeId)
+
 	switch req.VolumeContext["protocol"] {
 	case utils.ProtocolSmb:
 		return ns.nodeStageSMBVolume(ctx, spec, req.GetSecrets())
@@ -787,10 +922,49 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 		return nil, status.Error(codes.InvalidArgument, "Target path missing in request")
 	}
 
+	if !ns.volumeLocks.tryAcquire(volumeId) {
+		return nil, status.Errorf(codes.Aborted, "An operation on volume[%s] is already in progress", volumeId)
+	}
+	defer ns.volumeLocks.release(volumeId)
+
 	notMount, err := mount.IsNotMountPoint(ns.Mounter.Interface, stagingTargetPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		// Nothing is mounted at a path that is not there. It says nothing about the
+		// session, which is still the unstage's to end, so it goes on to the record.
+		notMount, err = true, nil
+	}
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
+
+	// What this volume's target is, in case DSM can no longer say. It has to be
+	// settled, and kept, before the unmount: once the unmount is done a retry has
+	// nothing to trace the target from but this.
+	record, err := ns.stageRecords.read(volumeId)
+	if err != nil {
+		log.Warnf("Ignoring the unusable stage record at %s: %v", ns.stageRecords.path(volumeId), err)
+		record = nil
+	}
+
+	var k8sVolume *models.K8sVolumeRespSpec
+	haveLookup := false
+	if record == nil && !notMount {
+		// Volumes staged before the driver wrote records have no record. DSM is asked
+		// before anything else is done, as it is the only thing that can say which
+		// target this volume has: the mounted device only says what is mounted at
+		// the path, which need not be this volume's.
+		k8sVolume, err = ns.lookupVolume(volumeId)
+		if err != nil {
+			return nil, err
+		}
+		haveLookup = true
+
+		record, err = ns.recordMountedTarget(volumeId, stagingTargetPath, k8sVolume)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if !notMount {
 		err = ns.Mounter.Interface.Unmount(stagingTargetPath)
 		if err != nil {
@@ -798,24 +972,139 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 		}
 	}
 
-	k8sVolume, err := ns.dsmService.GetVolume(volumeId)
-	if err != nil {
-		// Claiming the volume is unstaged could leave an iSCSI session logged
-		// in with nothing left to clean it up; let kubelet call again instead.
-		return nil, status.Errorf(codes.Unavailable,
-			"Couldn't determine whether volume[%s] exists: %v", volumeId, err)
+	if !haveLookup {
+		k8sVolume, err = ns.lookupVolume(volumeId)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if k8sVolume == nil {
-		return &csi.NodeUnstageVolumeResponse{}, nil
-	}
-
-	if k8sVolume.Protocol == utils.ProtocolIscsi {
-		ns.logoutTarget(k8sVolume)
+		// DSM has forgotten the volume -- deleted behind our back, or by a
+		// DeleteVolume that raced this call. Whatever it was logged in to is still
+		// logged in, and once this returns success kubelet forgets the volume, so
+		// this is the last chance to clean up.
+		if err := ns.unstageMissingIscsiVolume(volumeId, stagingTargetPath, record); err != nil {
+			return nil, err
+		}
+	} else if k8sVolume.Protocol == utils.ProtocolIscsi {
+		// A session that is still logged in makes DeleteVolume refuse the volume,
+		// so a failed logout must not be reported as unstaged: kubelet would stop
+		// retrying and nothing would ever end the session.
+		// Assume target and lun 1-1 mapping
+		if err := ns.logoutTarget(k8sVolume.Target.Iqn, k8sVolume.Target.MappedLuns[0].MappingIndex); err != nil {
+			return nil, status.Errorf(codes.Internal,
+				"Failed to log out of the target of volume[%s]: %v", volumeId, err)
+		}
 	} else if k8sVolume.Protocol == utils.ProtocolNvme {
 		ns.logoutNVMeSubsystem(k8sVolume.Subsystem.Nqn)
 	}
 
+	// Last, and only now that everything above has succeeded: a record removed
+	// any earlier would be gone if the teardown had to be retried. It must not be
+	// left either, since the record directory is the driver's to keep tidy.
+	if err := ns.stageRecords.remove(volumeId); err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to remove the stage record of volume[%s]: %v", volumeId, err)
+	}
+
 	return &csi.NodeUnstageVolumeResponse{}, nil
+}
+
+// lookupVolume asks DSM for a volume. A lookup that could not say whether the
+// volume exists is an error to retry, not "gone": treating that as gone would
+// skip the logout of a volume that is still very much there.
+func (ns *nodeServer) lookupVolume(volumeId string) (*models.K8sVolumeRespSpec, error) {
+	k8sVolume, err := ns.dsmService.GetVolume(volumeId)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable,
+			"Couldn't determine whether volume[%s] exists: %v", volumeId, err)
+	}
+	return k8sVolume, nil
+}
+
+// recordMountedTarget works out which target the volume mounted at
+// stagingTargetPath has, for a volume that has no record, and records it.
+// dsmVolume is what DSM says about the volume, nil if it has none. It returns
+// nil if the target cannot be told or is not one to act on, which leaves the
+// unstage with nothing to go on, exactly as for a volume staged without a record.
+//
+// An error means the target is known but could not be recorded: unmounting
+// would lose it, so the unstage must not go on. Nothing has changed yet, and
+// kubelet will retry.
+func (ns *nodeServer) recordMountedTarget(volumeId, stagingTargetPath string, dsmVolume *models.K8sVolumeRespSpec) (*iscsiStageRecord, error) {
+	mounted, mountErr := mountedIscsiTarget(ns.Mounter.Interface, stagingTargetPath, sysfsRoot)
+	if mountErr != nil {
+		log.Debugf("Couldn't tell which iSCSI target backs %s: %v", stagingTargetPath, mountErr)
+	}
+
+	if dsmVolume != nil {
+		// DSM's word is the volume's target. What is mounted at the path need not be
+		// this volume's, and the other target is not this unstage's to touch.
+		if dsmVolume.Protocol != utils.ProtocolIscsi || len(dsmVolume.Target.MappedLuns) == 0 {
+			return nil, nil
+		}
+		record := iscsiStageRecord{
+			VolumeId:     volumeId,
+			Iqn:          dsmVolume.Target.Iqn,
+			MappingIndex: dsmVolume.Target.MappedLuns[0].MappingIndex,
+		}
+		if mountErr == nil && (mounted.Iqn != record.Iqn || mounted.Lun != record.MappingIndex) {
+			log.Warnf("The mount at %s of volume[%s] came from target[%s] LUN %d, but DSM says the volume is on target[%s] LUN %d; "+
+				"going by DSM, and leaving the other target alone",
+				stagingTargetPath, volumeId, mounted.Iqn, mounted.Lun, record.Iqn, record.MappingIndex)
+		}
+		if err := ns.stageRecords.write(record); err != nil {
+			return nil, status.Errorf(codes.Internal,
+				"Couldn't record target[%s] of volume[%s] before unmounting it: %v", record.Iqn, volumeId, err)
+		}
+		return &record, nil
+	}
+
+	if mountErr != nil {
+		return nil, nil
+	}
+
+	// DSM has forgotten the volume, so the kernel's answer is all there is, and it
+	// is for whatever happened to be mounted there. Nothing ties it to this volume
+	// -- the IQN is built from a name the node does not have -- so it is only
+	// believed for a target this driver would have created, and, by
+	// iscsiTargetOfDevice, only if every path of the device agrees. Where that
+	// leaves doubt the volume is left alone: a stale session is a leak, a logout of
+	// someone else's target is an outage.
+	if !strings.HasPrefix(mounted.Iqn, models.IqnPrefix) {
+		log.Warnf("The mount at %s of volume[%s] came from target[%s], which this driver did not create; "+
+			"leaving it alone", stagingTargetPath, volumeId, mounted.Iqn)
+		return nil, nil
+	}
+
+	record := iscsiStageRecord{VolumeId: volumeId, Iqn: mounted.Iqn, MappingIndex: mounted.Lun}
+	if err := ns.stageRecords.write(record); err != nil {
+		return nil, status.Errorf(codes.Internal,
+			"Couldn't record target[%s] of volume[%s] before unmounting it: %v", mounted.Iqn, volumeId, err)
+	}
+	return &record, nil
+}
+
+// unstageMissingIscsiVolume logs out of the target of a volume DSM no longer
+// has, if it can be worked out which one that was. An error means the logout
+// failed and the unstage should be retried; not knowing the target is not one,
+// because nothing can be retried.
+func (ns *nodeServer) unstageMissingIscsiVolume(volumeId, stagingTargetPath string, record *iscsiStageRecord) error {
+	if record == nil {
+		// Nothing to go on: either not an iSCSI volume at all (NVMe volumes have
+		// no record either), or one staged before records were kept and no longer
+		// mounted, or a raw block volume, which is never staged and so never
+		// recorded -- those are not handled here.
+		log.Warnf("Volume[%s] is not in DSM and its target is unknown (no stage record at %s, and nothing mounted "+
+			"at %s to trace it from); if it was an iSCSI volume, this node may still be logged in to its target",
+			volumeId, ns.stageRecords.path(volumeId), stagingTargetPath)
+		return nil
+	}
+
+	log.Infof("Volume[%s] is not in DSM, logging out of its target[%s] anyway", volumeId, record.Iqn)
+	if err := ns.logoutTarget(record.Iqn, record.MappingIndex); err != nil {
+		return status.Errorf(codes.Internal, "Failed to log out of target[%s] of volume[%s]: %v", record.Iqn, volumeId, err)
+	}
+	return nil
 }
 
 func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
@@ -829,6 +1118,11 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	if req.GetVolumeCapability() == nil {
 		return nil, status.Error(codes.InvalidArgument, "Volume capability missing in request")
 	}
+
+	if !ns.volumeLocks.tryAcquire(volumeId) {
+		return nil, status.Errorf(codes.Aborted, "An operation on volume[%s] is already in progress", volumeId)
+	}
+	defer ns.volumeLocks.release(volumeId)
 
 	isBlock := req.GetVolumeCapability().GetBlock() != nil // raw block, for iscsi, nvme-tcp protocol
 	fsType := req.GetVolumeCapability().GetMount().GetFsType()
@@ -950,7 +1244,7 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	default:
-		iscsiDevPaths, iqn, lun, err := ns.loginTarget(volumeId)
+		iscsiDevPaths, iqn, lun, err := ns.loginTarget(volumeId, nil)
 		if err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
@@ -986,6 +1280,11 @@ func (ns *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 	if targetPath == "" {
 		return nil, status.Error(codes.InvalidArgument, "Target path missing in request")
 	}
+
+	if !ns.volumeLocks.tryAcquire(req.GetVolumeId()) {
+		return nil, status.Errorf(codes.Aborted, "An operation on volume[%s] is already in progress", req.GetVolumeId())
+	}
+	defer ns.volumeLocks.release(req.GetVolumeId())
 
 	if _, err := os.Stat(targetPath); err != nil {
 		if os.IsNotExist(err) {

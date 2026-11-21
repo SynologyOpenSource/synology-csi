@@ -93,20 +93,30 @@ func parseSessions(lines string) []iscsiSession {
 	return sessions
 }
 
-func (t *tools) iscsiadm_session() []iscsiSession {
+// iscsiadmFoundNothing reports whether iscsiadm failed only because there was
+// nothing to act on (ISCSI_ERR_NO_OBJS_FOUND), which is an answer rather than a
+// failure: "no sessions", "no records".
+func iscsiadmFoundNothing(err error) bool {
+	exitErr, ok := err.(utilexec.ExitError)
+	return ok && exitErr.ExitStatus() == 21
+}
+
+// iscsiadm_session lists the active sessions. No sessions is an empty list; a
+// command that failed is an error, as the caller cannot tell from it whether
+// there is a session to end.
+func (t *tools) iscsiadm_session() ([]iscsiSession, error) {
 	cmd := t.iscsiadm("-m", "session")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		exitErr, ok := err.(utilexec.ExitError)
-		if ok && exitErr.ExitStatus() == 21 { // iscsiadm: No active sessions
+		if iscsiadmFoundNothing(err) { // iscsiadm: No active sessions
 			log.Info("No active iscsi session found.")
-		} else {
-			log.Errorf("Failed to run iscsiadm session: %v", err)
+			return []iscsiSession{}, nil
 		}
-		return []iscsiSession{}
+		log.Errorf("Failed to run iscsiadm session: %v", err)
+		return nil, fmt.Errorf("failed to list the iSCSI sessions: %s (%v)", strings.TrimSpace(string(out)), err)
 	}
 
-	return parseSessions(string(out))
+	return parseSessions(string(out)), nil
 }
 
 func (t *tools) iscsiadm_discovery(portal string) error {
@@ -152,6 +162,10 @@ func (t *tools) iscsiadm_update_node_startup(iqn, portal string) error {
 }
 
 func (t *tools) iscsiadm_logout(iqn string) error {
+	// Without a target name iscsiadm logs out of every target on the node.
+	if iqn == "" {
+		return errors.New("refusing to log out without a target name")
+	}
 	cmd := t.iscsiadm(
 		"-m", "node",
 		"--targetname", iqn,
@@ -162,19 +176,36 @@ func (t *tools) iscsiadm_logout(iqn string) error {
 	return nil
 }
 
-// iscsiadm_delete_node removes the node record for a target. The record is
+// iscsiadm_delete_node removes the node records for a target. The record is
 // separate from the session: logging out ends the session but leaves the record
 // behind, and iscsid then retries the login every 60 seconds against a target
 // DSM has already deleted. Reported in #138, where a node kept doing that
 // across reboots until the record was removed by hand.
-func (t *tools) iscsiadm_delete_node(iqn string, portal string) error {
+//
+// No portal is given on purpose: that deletes the record of every portal the
+// target was logged in through. The portal a record is filed under is whatever
+// address login used (an IP, even when the DSM is configured by hostname, and
+// a second one for a dual-controller DSM), which callers cleaning up after the
+// fact cannot be expected to know.
+//
+// A target with no record left is what the caller wanted, so it is not an
+// error: that is the normal outcome when the login never got as far as
+// creating one, and when an earlier attempt at this already removed it.
+func (t *tools) iscsiadm_delete_node(iqn string) error {
+	// A delete with no target name is a delete of every record on the node.
+	if iqn == "" {
+		return errors.New("refusing to delete node records without a target name")
+	}
 	cmd := t.iscsiadm(
 		"-m", "node",
 		"--targetname", iqn,
-		"--portal", portal,
 		"-o", "delete")
-	if _, err := cmd.CombinedOutput(); err != nil {
-		return err
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if iscsiadmFoundNothing(err) || strings.Contains(string(out), "No records found") {
+			return nil
+		}
+		return fmt.Errorf("%s (%v)", strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }
@@ -207,20 +238,26 @@ func (t *tools) iscsiadm_rescan(iqn string) error {
 	return nil
 }
 
-func (t *tools) hasSession(targetIqn string, portal string) bool {
-	sessions := t.iscsiadm_session()
+func (t *tools) hasSession(targetIqn string, portal string) (bool, error) {
+	sessions, err := t.iscsiadm_session()
+	if err != nil {
+		return false, err
+	}
 
 	for _, s := range sessions {
 		if targetIqn == s.Iqn && (portal == s.Portal || portal == "") {
-			return true
+			return true, nil
 		}
 	}
 
-	return false
+	return false, nil
 }
 
-func (t *tools) listSessionsByIqn(targetIqn string) (matchedSessions []iscsiSession) {
-	sessions := t.iscsiadm_session()
+func (t *tools) listSessionsByIqn(targetIqn string) (matchedSessions []iscsiSession, err error) {
+	sessions, err := t.iscsiadm_session()
+	if err != nil {
+		return nil, err
+	}
 
 	for _, s := range sessions {
 		if targetIqn == s.Iqn {
@@ -228,11 +265,15 @@ func (t *tools) listSessionsByIqn(targetIqn string) (matchedSessions []iscsiSess
 		}
 	}
 
-	return matchedSessions
+	return matchedSessions, nil
 }
 
 func (d *initiatorDriver) login(targetIqn string, portal string) error {
-	if d.tools.hasSession(targetIqn, portal) {
+	exists, err := d.tools.hasSession(targetIqn, portal)
+	if err != nil {
+		return err
+	}
+	if exists {
 		log.Infof("Session[%s] already exists.", targetIqn)
 		return nil
 	}
@@ -256,36 +297,45 @@ func (d *initiatorDriver) login(targetIqn string, portal string) error {
 	return nil
 }
 
-func (d *initiatorDriver) logout(targetIqn string, ip string) error {
-	portal := fmt.Sprintf("%s:%d", ip, ISCSIPort)
-
-	if d.tools.hasSession(targetIqn, "") {
+// logout ends the session with the target and removes its node records. Either
+// failing is an error: a session left behind keeps DSM from deleting the
+// target, and a record left behind has iscsid retrying a login for good, so a
+// caller that was told "done" would never find out.
+func (d *initiatorDriver) logout(targetIqn string) error {
+	exists, err := d.tools.hasSession(targetIqn, "")
+	if err != nil {
+		return err
+	}
+	if exists {
 		if err := d.tools.iscsiadm_logout(targetIqn); err != nil {
-			log.Errorf("Failed in logout of the target.\nTarget [%s], Portal [%s], Err[%v]",
-				targetIqn, portal, err)
+			log.Errorf("Failed in logout of the target.\nTarget [%s], Err[%v]",
+				targetIqn, err)
 			return err
 		}
-		log.Infof("Logout target portal [%s], iqn [%s].", portal, targetIqn)
+		log.Infof("Logout target iqn [%s].", targetIqn)
 	} else {
 		log.Infof("Session[%s] doesn't exist.", targetIqn)
 	}
 
-	// Deliberately outside the session check: the case that leaves iscsid
-	// retrying forever is exactly the one where the session is already gone but
-	// the record is not, so returning early on "no session" would skip the
-	// cleanup precisely when it is needed.
-	if err := d.tools.iscsiadm_delete_node(targetIqn, portal); err != nil {
-		// Not fatal. The volume is detached either way; what is left behind is
-		// a record that makes noise rather than one that breaks anything.
-		log.Warnf("Failed to remove the iSCSI node record for target [%s] portal [%s], "+
-			"iscsid may keep retrying the login: %v", targetIqn, portal, err)
+	// Not conditional on there having been a session. The case this exists for,
+	// iscsid retrying forever, is exactly the one where the session is already
+	// gone but the record is not, so returning early on "no session" would skip
+	// the cleanup precisely when it is needed.
+	if err := d.tools.iscsiadm_delete_node(targetIqn); err != nil {
+		log.Errorf("Failed to remove the iSCSI node record for target [%s], "+
+			"iscsid may keep retrying the login: %v", targetIqn, err)
+		return err
 	}
 
 	return nil
 }
 
 func (d *initiatorDriver) rescan(targetIqn string) error {
-	if !d.tools.hasSession(targetIqn, "") {
+	exists, err := d.tools.hasSession(targetIqn, "")
+	if err != nil {
+		return err
+	}
+	if !exists {
 		msg := fmt.Sprintf("Session[%s] doesn't exist.", targetIqn)
 		log.Error(msg)
 		return errors.New(msg)
