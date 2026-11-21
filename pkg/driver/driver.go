@@ -94,6 +94,13 @@ func NewControllerAndNodeDriver(nodeID string, endpoint string, dsmService inter
 // TODO: func NewControllerDriver() {}
 
 func (d *Driver) Activate() {
+	// In the background: it shells out to iscsiadm per session and asks DSM
+	// which targets are ours, and must not delay the plugin socket coming up.
+	// It only logs on failure.
+	go d.tools.reconcileIscsiSessions(func() (map[string]struct{}, error) {
+		return ownedIscsiTargets(d.DsmService)
+	})
+
 	go func() {
 		RunControllerandNodePublishServer(d.endpoint, d, NewControllerServer(d), NewNodeServer(d))
 	}()

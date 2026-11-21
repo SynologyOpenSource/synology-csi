@@ -67,6 +67,25 @@ node:
   # If your kubelet path is not standard, specify it here :
   ## example for miocrok8s distrib : /var/snap/microk8s/common/var/lib/kubelet
   kubeletPath: /var/lib/kubelet
+  iscsi:
+    # Seconds a session queues I/O while its connection is down before failing
+    # it to the filesystem (iSCSI node.session.timeo.replacement_timeout).
+    # 0 (the default) leaves the host's iscsid configuration alone, which is
+    # 120s unless the host's iscsid.conf says otherwise. Some distributions,
+    # e.g. Talos Linux with its iscsi-tools extension, ship no iscsid.conf, so
+    # set this to ride out network outages longer than two minutes.
+    # Also applied to volumes that are already logged in when the node plugin
+    # (re)starts, so changing it does not require restaging them.
+    # Must be an integer from 0 to 2147483647. Setting it back to 0 stops
+    # further tuning but does not undo what was written: open-iscsi keeps the
+    # value in each target's node record, which lasts until the record is
+    # deleted and recreated (a full unstage/stage of the volume does this) or
+    # reset with:
+    #   iscsiadm -m node -T <iqn> -o update -n node.session.timeo.replacement_timeout -v <value>
+    # With multipath this is not applied (to sessions in a multipath map, or
+    # targets with several sessions or portals); multipathd decides failover
+    # timing, so tune it instead (fast_io_fail_tmo, dev_loss_tmo, no_path_retry).
+    replacementTimeout: 0
   extraArgs: []
   # - --iscsiadm-path=/usr/local/sbin/iscsiadm
 # Specifies affinity, nodeSelector and tolerations for the snapshotter StatefulSet

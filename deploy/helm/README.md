@@ -49,6 +49,37 @@ As usual with Helm, you can override the values in the file [`values.yaml`](valu
 In particular, override the section `clientInfoSecret.clients` to match the connection parameters and credentials for
 accessing your Synology Diskstation.
 
+#### iSCSI replacement timeout
+
+When the connection to the Diskstation is lost, the iSCSI initiator queues pending I/O for
+`node.session.timeo.replacement_timeout` seconds and then fails it, which makes ext4 abort its journal and
+remount the volume read-only. The built-in default is 120 seconds and is normally overridden by the host's
+`iscsid.conf`, but some distributions (for example Talos Linux with the `iscsi-tools` extension) ship none. Set
+`node.iscsi.replacementTimeout` to the number of seconds your network can be down before volumes should fail, e.g.:
+
+    helm install <release-name> synology-csi-chart/synology-csi --set node.iscsi.replacementTimeout=600
+
+This renders `--iscsi-replacement-timeout=600` on the node plugin. The default `0` leaves the host's
+configuration alone. The value must be an integer from 0 to 2147483647 (the kernel's limit);
+anything else fails `helm install` and `helm template`. The value is also applied to this driver's sessions that are already logged in when the
+node plugin starts, so existing volumes do not need to be restaged. A session that is disconnected at that
+moment takes the value as soon as it is back.
+
+With multipath, tune multipathd instead (`fast_io_fail_tmo`, `dev_loss_tmo`, `no_path_retry`):
+multipathd sets the recovery timeout of its paths itself to fail over quickly, so this option is not applied to
+sessions whose disk is part of a multipath map, nor to targets that have more than one session or are logged in
+through more than one portal.
+
+Setting the value back to `0` stops further tuning but does not undo what was written. open-iscsi loads
+`replacement_timeout` from the target's persistent node record at every login, so the value survives re-logins,
+iscsid restarts and node reboots. To restore the host's configuration, delete and recreate the node record (a full
+unstage and stage of the volume, for example by rescheduling the pod, does this, because the unstage deletes the
+record) or reset it on the node:
+
+    iscsiadm -m node -T <iqn> -o update -n node.session.timeo.replacement_timeout -v <value>
+
+where `<value>` is what the host's `iscsid.conf` sets (120 by default). The reset takes effect at the next login.
+
 You can also use an existing secret (specify using the key `clientInfoSecret.name`) that contains a `clients`
 dictionary under `client-info.yaml` key:
 

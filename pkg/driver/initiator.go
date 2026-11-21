@@ -19,6 +19,7 @@ limitations under the License.
 package driver
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -50,13 +51,38 @@ const (
 
 type tools struct {
 	executor hostexec.Executor
+	// iscsiReplacementTimeout is node.session.timeo.replacement_timeout in
+	// seconds. 0 leaves the value iscsid is configured with untouched.
+	iscsiReplacementTimeout int
+	// tuning holds what the replacement timeout needs besides the value: shared
+	// by every copy of tools, since they all see the same sessions.
+	tuning *sessionTuning
+}
+
+// ToolsOption customizes the tools created by NewTools.
+type ToolsOption func(*tools)
+
+// WithIscsiReplacementTimeout makes the driver set
+// node.session.timeo.replacement_timeout (seconds) on the iSCSI sessions it
+// manages. 0 leaves the host's iscsid configuration in charge.
+func WithIscsiReplacementTimeout(seconds int) ToolsOption {
+	return func(t *tools) { t.iscsiReplacementTimeout = seconds }
+}
+
+// WithContext bounds the background work started for the replacement timeout,
+// i.e. retrying sessions that were not ready to take it. Without it that work
+// runs until the process exits.
+func WithContext(ctx context.Context) ToolsOption {
+	return func(t *tools) { t.tuning.ctx = ctx }
 }
 
 // NewTools creates a new tools wrapper for calling utilities with given executor
-func NewTools(executor hostexec.Executor) tools {
-	return tools{
-		executor: executor,
+func NewTools(executor hostexec.Executor, opts ...ToolsOption) tools {
+	t := tools{executor: executor, tuning: newSessionTuning()}
+	for _, opt := range opts {
+		opt(&t)
 	}
+	return t
 }
 
 func (t *tools) iscsiadm(cmdArgs ...string) utilexec.Cmd {
@@ -80,12 +106,20 @@ func parseSessions(lines string) []iscsiSession {
 		id64, _ := strconv.ParseInt(id, 10, 32)
 		portal := strings.Split(e[2], ",")[0]
 
+		// Not every target name has a ':' (eui. and naa. names don't). The
+		// node plugin now looks at every session on the host at startup, not
+		// just ones for volumes it staged, so don't index past the split.
+		name := ""
+		if parts := strings.SplitN(e[3], ":", 2); len(parts) == 2 {
+			name = parts[1]
+		}
+
 		s := iscsiSession{
 			Protocol: protocol,
 			Id:       int32(id64),
 			Portal:   portal,
 			Iqn:      e[3],
-			Name:     strings.Split(e[3], ":")[1],
+			Name:     name,
 		}
 		sessions = append(sessions, s)
 	}
@@ -93,20 +127,22 @@ func parseSessions(lines string) []iscsiSession {
 	return sessions
 }
 
-func (t *tools) iscsiadm_session() []iscsiSession {
+// iscsiadm_session lists the active sessions. Having none is not an error, but
+// failing to find out is: callers must not read it as "no session", or a logout
+// would be skipped for a session that is still there.
+func (t *tools) iscsiadm_session() ([]iscsiSession, error) {
 	cmd := t.iscsiadm("-m", "session")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		exitErr, ok := err.(utilexec.ExitError)
 		if ok && exitErr.ExitStatus() == 21 { // iscsiadm: No active sessions
 			log.Info("No active iscsi session found.")
-		} else {
-			log.Errorf("Failed to run iscsiadm session: %v", err)
+			return []iscsiSession{}, nil
 		}
-		return []iscsiSession{}
+		return nil, fmt.Errorf("failed to run iscsiadm session: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
 
-	return parseSessions(string(out))
+	return parseSessions(string(out)), nil
 }
 
 func (t *tools) iscsiadm_discovery(portal string) error {
@@ -144,6 +180,30 @@ func (t *tools) iscsiadm_update_node_startup(iqn, portal string) error {
 		"--op", "update",
 		"--name", "node.startup",
 		"--value", "manual")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s (%v)", string(out), err)
+	}
+	return nil
+}
+
+// iscsiadm_update_node_replacement_timeout sets how long the kernel queues I/O
+// for a session whose connection is down before failing it up to the
+// filesystem. The value is stored in the node record and applied at login.
+//
+// iscsid's built-in default is 120s and it normally comes from iscsid.conf,
+// but some distros (Talos' iscsi-tools extension, for one) ship no iscsid.conf,
+// so a network outage longer than two minutes fails pending I/O and ext4
+// aborts its journal. Setting it here lets the admin choose the value per
+// driver instead of depending on the host's configuration.
+func (t *tools) iscsiadm_update_node_replacement_timeout(iqn, portal string, seconds int) error {
+	cmd := t.iscsiadm(
+		"-m", "node",
+		"--targetname", iqn,
+		"--portal", portal,
+		"--op", "update",
+		"--name", "node.session.timeo.replacement_timeout",
+		"--value", strconv.Itoa(seconds))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s (%v)", string(out), err)
@@ -207,20 +267,43 @@ func (t *tools) iscsiadm_rescan(iqn string) error {
 	return nil
 }
 
-func (t *tools) hasSession(targetIqn string, portal string) bool {
-	sessions := t.iscsiadm_session()
+func (t *tools) hasSession(targetIqn string, portal string) (bool, error) {
+	sessions, err := t.iscsiadm_session()
+	if err != nil {
+		return false, err
+	}
 
 	for _, s := range sessions {
 		if targetIqn == s.Iqn && (portal == s.Portal || portal == "") {
-			return true
+			return true, nil
 		}
 	}
 
-	return false
+	return false, nil
 }
 
-func (t *tools) listSessionsByIqn(targetIqn string) (matchedSessions []iscsiSession) {
-	sessions := t.iscsiadm_session()
+// findSessions returns the sessions to a target, limited to one portal unless
+// portal is empty.
+func (t *tools) findSessions(targetIqn string, portal string) (matchedSessions []iscsiSession, err error) {
+	sessions, err := t.iscsiadm_session()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, s := range sessions {
+		if targetIqn == s.Iqn && (portal == s.Portal || portal == "") {
+			matchedSessions = append(matchedSessions, s)
+		}
+	}
+
+	return matchedSessions, nil
+}
+
+func (t *tools) listSessionsByIqn(targetIqn string) (matchedSessions []iscsiSession, err error) {
+	sessions, err := t.iscsiadm_session()
+	if err != nil {
+		return nil, err
+	}
 
 	for _, s := range sessions {
 		if targetIqn == s.Iqn {
@@ -228,18 +311,59 @@ func (t *tools) listSessionsByIqn(targetIqn string) (matchedSessions []iscsiSess
 		}
 	}
 
-	return matchedSessions
+	return matchedSessions, nil
 }
 
-func (d *initiatorDriver) login(targetIqn string, portal string) error {
-	if d.tools.hasSession(targetIqn, portal) {
+// login logs in to the target through one portal. tuneReplacementTimeout says
+// whether the configured replacement timeout may be applied to the session; it
+// is false when the target is logged in through several portals, because
+// multipathd then owns the failover timing (see loginTarget).
+func (d *initiatorDriver) login(targetIqn string, portal string, tuneReplacementTimeout bool) error {
+	tune := tuneReplacementTimeout && d.tools.iscsiReplacementTimeout > 0
+
+	sessions, err := d.tools.findSessions(targetIqn, portal)
+	if err != nil {
+		// Login proceeds as it always has; if the session exists, iscsiadm
+		// reports that itself.
+		log.Warnf("Couldn't list the iSCSI sessions: %v", err)
+	}
+	if len(sessions) > 0 {
 		log.Infof("Session[%s] already exists.", targetIqn)
+		if tune {
+			// Staged before the timeout was configured, e.g. before an upgrade.
+			d.tools.applyReplacementTimeout(sessions, false)
+		}
 		return nil
 	}
 
 	if err := d.tools.iscsiadm_discovery(portal); err != nil {
 		log.Errorf("Failed to discover portal [%s]: %v", portal, err)
 		return err
+	}
+
+	// Has to happen after discovery, which creates the node record, and before
+	// login, which is when the record is read into the session.
+	// A target that already has a session through another portal is multipath's
+	// to tune, the same rule targetTunable applies to existing sessions. When
+	// the sessions can't be listed that can't be ruled out, so don't tune.
+	if tune {
+		others, err := d.tools.listSessionsByIqn(targetIqn)
+		switch {
+		case err != nil:
+			log.Warnf("Not setting the replacement timeout of target [%s] for portal [%s]: couldn't tell whether the target "+
+				"is already logged in through another portal: %v", targetIqn, portal, err)
+			tune = false
+		case len(others) > 0:
+			log.Infof("Not setting the replacement timeout of target [%s] for portal [%s]: the target is already logged in "+
+				"through another portal, so multipathd decides the failover timing.", targetIqn, portal)
+			tune = false
+		}
+	}
+	if tune {
+		if err := d.tools.iscsiadm_update_node_replacement_timeout(targetIqn, portal, d.tools.iscsiReplacementTimeout); err != nil {
+			log.Warnf("Failed to update target node.session.timeo.replacement_timeout to %d: %v",
+				d.tools.iscsiReplacementTimeout, err)
+		}
 	}
 
 	if err := d.tools.iscsiadm_login(targetIqn, portal); err != nil {
@@ -259,7 +383,11 @@ func (d *initiatorDriver) login(targetIqn string, portal string) error {
 func (d *initiatorDriver) logout(targetIqn string, ip string) error {
 	portal := fmt.Sprintf("%s:%d", ip, ISCSIPort)
 
-	if d.tools.hasSession(targetIqn, "") {
+	exists, err := d.tools.hasSession(targetIqn, "")
+	if err != nil {
+		return err
+	}
+	if exists {
 		if err := d.tools.iscsiadm_logout(targetIqn); err != nil {
 			log.Errorf("Failed in logout of the target.\nTarget [%s], Portal [%s], Err[%v]",
 				targetIqn, portal, err)
@@ -285,7 +413,11 @@ func (d *initiatorDriver) logout(targetIqn string, ip string) error {
 }
 
 func (d *initiatorDriver) rescan(targetIqn string) error {
-	if !d.tools.hasSession(targetIqn, "") {
+	exists, err := d.tools.hasSession(targetIqn, "")
+	if err != nil {
+		return err
+	}
+	if !exists {
 		msg := fmt.Sprintf("Session[%s] doesn't exist.", targetIqn)
 		log.Error(msg)
 		return errors.New(msg)

@@ -79,6 +79,19 @@ Storage classes and the secret are required for the CSI driver to function prope
 2. Configure storageclasses
 3. Configure volumesnapshotclasses
 
+### Node Plugin Options
+The node plugin accepts the following optional command line flags (set them in the `args` of the `csi-plugin` container, or through `node.iscsi.replacementTimeout` in the Helm chart):
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--iscsi-replacement-timeout` | `0` | Seconds an iSCSI session queues pending I/O while its connection is down before failing it (`node.session.timeo.replacement_timeout`). `0` leaves the host's iscsid configuration alone, which is 120 seconds unless the host's `iscsid.conf` says otherwise. Some distributions (e.g. Talos Linux with the `iscsi-tools` extension) ship no `iscsid.conf`, so a network outage longer than two minutes fails I/O and aborts ext4 journals; set a larger value there. It is applied when a target is logged in and also to this driver's sessions that are already logged in when the node plugin starts, so existing volumes do not need to be restaged. A session that is disconnected at that moment takes the value as soon as it is back. A negative value, or one above 2147483647 (the kernel's limit), is rejected. See the notes below. |
+
+Notes on `--iscsi-replacement-timeout`:
+
+- **Multipath takes precedence.** The option is not applied to sessions whose disk is part of a device-mapper multipath map, nor to a target that has more than one iSCSI session or is logged in through more than one portal (dual-controller systems with multipath enabled). This is checked before every write, including the startup pass and the background retries, because during boot or a multipath rebuild a target's sessions exist before their disks are in a map. multipathd sets the recovery timeout of its paths itself, from `fast_io_fail_tmo`, so that I/O fails over to the other path quickly, and a timeout of minutes would delay that failover. With multipath, tune multipathd instead (`fast_io_fail_tmo`, `dev_loss_tmo`, `no_path_retry`).
+- **Only sessions of this driver's volumes are changed.** The sessions of other iSCSI targets on the host, including Synology LUNs that were not created by the driver, are left alone.
+- **Setting it back to `0` stops further tuning but does not undo what was written.** open-iscsi loads `replacement_timeout` from the target's persistent node record each time it logs in, so a value written to a record survives session re-logins, iscsid restarts and node reboots. To go back to the host's configuration, either delete and recreate the node record (a full unstage and stage of the volume does this, because the unstage deletes the record) or reset it explicitly on the node: `iscsiadm -m node -T <iqn> -o update -n node.session.timeo.replacement_timeout -v <value>`, with `<value>` being what your `iscsid.conf` sets (the built-in default is 120). A reset record takes effect at the next login of the session; a live session keeps the value the kernel has until then.
+
 ### Creating a Secret
 Create a secret to specify the storage system address and credentials (username and password). Usually the config file sets up the secret as well, but if you still want to create the secret or recreate it, follow the instructions below:
 

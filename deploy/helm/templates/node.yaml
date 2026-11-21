@@ -103,6 +103,10 @@ spec:
             {{- if .plugin.supportChrootDir }}
             - --chroot-dir=/host
             {{- end }}
+            {{- $replacementTimeout := include "synology-csi.iscsiReplacementTimeout" $.Values.node.iscsi.replacementTimeout | int }}
+            {{- if gt $replacementTimeout 0 }}
+            - --iscsi-replacement-timeout={{ $replacementTimeout }}
+            {{- end }}
             {{- with $.Values.node.extraArgs }}
             {{ toYaml . }}
             {{- end }}
