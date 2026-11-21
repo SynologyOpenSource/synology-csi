@@ -5,6 +5,9 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"math"
 	"os"
 	"os/signal"
 	"syscall"
@@ -34,6 +37,8 @@ var (
 	multipathPath  = ""
 	multipathdPath = ""
 	nvmePath       = ""
+	// iSCSI session tuning; 0 leaves the host's iscsid configuration alone
+	iscsiReplacementTimeout = 0
 )
 
 var rootCmd = &cobra.Command{
@@ -47,6 +52,10 @@ var rootCmd = &cobra.Command{
 		}
 		logger.Init(logLevel)
 
+		if err := validateIscsiReplacementTimeout(iscsiReplacementTimeout); err != nil {
+			return err
+		}
+
 		if !multipathForUC {
 			driver.MultipathEnabled = false
 		}
@@ -58,6 +67,20 @@ var rootCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+// maxIscsiReplacementTimeout is the largest value the kernel's recovery_tmo
+// (a C int) can hold.
+const maxIscsiReplacementTimeout = math.MaxInt32
+
+func validateIscsiReplacementTimeout(seconds int) error {
+	if seconds < 0 {
+		return fmt.Errorf("--iscsi-replacement-timeout must not be negative, got %d", seconds)
+	}
+	if int64(seconds) > maxIscsiReplacementTimeout {
+		return fmt.Errorf("--iscsi-replacement-timeout must not exceed %d seconds, got %d", maxIscsiReplacementTimeout, seconds)
+	}
+	return nil
 }
 
 func driverStart() error {
@@ -92,7 +115,11 @@ func driverStart() error {
 		log.Errorf("Failed to create command executor: %v", err)
 		return err
 	}
-	tools := driver.NewTools(cmdExecutor)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tools := driver.NewTools(cmdExecutor,
+		driver.WithIscsiReplacementTimeout(iscsiReplacementTimeout),
+		driver.WithContext(ctx))
 
 	// 3. Create and Run the Driver
 	drv, err := driver.NewControllerAndNodeDriver(csiNodeID, csiEndpoint, dsmService, tools)
@@ -133,6 +160,16 @@ func addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(&multipathPath, "multipath-path", multipathPath, "Full path of multipath executable")
 	cmd.PersistentFlags().StringVar(&multipathdPath, "multipathd-path", multipathdPath, "Full path of multipathd executable")
 	cmd.PersistentFlags().StringVar(&nvmePath, "nvme-path", nvmePath, "Full path of nvme executable")
+
+	cmd.PersistentFlags().IntVar(&iscsiReplacementTimeout, "iscsi-replacement-timeout", iscsiReplacementTimeout,
+		"Seconds iSCSI sessions queue I/O while the connection is down before failing it "+
+			"(node.session.timeo.replacement_timeout). 0 leaves the host's iscsid configuration alone. "+
+			"Not applied to sessions that are part of a multipath map (nor to targets logged in through "+
+			"more than one portal): multipathd decides their failover timing, so tune it there "+
+			"(fast_io_fail_tmo, dev_loss_tmo, no_path_retry). Setting this back to 0 does not undo values "+
+			"already written: open-iscsi keeps the value in each target's node record, which lasts until the record is "+
+			"deleted and recreated (unstaging and staging the volume does this) or reset with iscsiadm -m node -T <iqn> "+
+			"-o update -n node.session.timeo.replacement_timeout -v <value>. Must be at most 2147483647")
 
 	cmd.MarkFlagRequired("endpoint")
 	cmd.MarkFlagRequired("client-info")
