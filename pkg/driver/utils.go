@@ -21,6 +21,7 @@ package driver
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -63,10 +64,33 @@ func getK8sClient() clientset.Interface {
 	return client
 }
 
+// StageRecordDir is where the node keeps its stage records. Left empty it is
+// stageRecordDir(endpoint).
+var StageRecordDir string
+
+// stageRecordDir is the directory for the stage records: StageRecordDir if set,
+// and otherwise "stage" next to the CSI socket. The socket's directory is the
+// plugin directory, which has to be a host path that outlives the pod for
+// kubelet to reach the driver, so records kept there survive a restart of the
+// driver with no mount of their own. An endpoint that is not a unix socket has
+// no such directory, and the default plugin directory is assumed.
+func stageRecordDir(endpoint string) string {
+	if StageRecordDir != "" {
+		return StageRecordDir
+	}
+	if proto, addr, err := ParseEndpoint(endpoint); err == nil && proto == "unix" {
+		return filepath.Join("/", filepath.Dir(addr), "stage")
+	}
+	return filepath.Join("/var/lib/kubelet/plugins", DriverName, "stage")
+}
+
 func NewNodeServer(d *Driver) *nodeServer {
+	records := stageRecords{dir: stageRecordDir(d.endpoint)}
+	records.sweep()
 	return &nodeServer{
-		Driver:     d,
-		dsmService: d.DsmService,
+		stageRecords: records,
+		Driver:       d,
+		dsmService:   d.DsmService,
 		Mounter: &mount.SafeFormatAndMount{
 			Interface: mount.New(""),
 			Exec:      exec.New(),

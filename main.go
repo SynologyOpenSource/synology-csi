@@ -34,6 +34,8 @@ var (
 	multipathPath  = ""
 	multipathdPath = ""
 	nvmePath       = ""
+	// Where the node keeps what it needs to unstage a volume DSM has lost
+	stageRecordDir = ""
 )
 
 var rootCmd = &cobra.Command{
@@ -50,6 +52,7 @@ var rootCmd = &cobra.Command{
 		if !multipathForUC {
 			driver.MultipathEnabled = false
 		}
+		driver.StageRecordDir = stageRecordDir
 
 		err := driverStart()
 		if err != nil {
@@ -133,6 +136,10 @@ func addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(&multipathPath, "multipath-path", multipathPath, "Full path of multipath executable")
 	cmd.PersistentFlags().StringVar(&multipathdPath, "multipathd-path", multipathdPath, "Full path of multipathd executable")
 	cmd.PersistentFlags().StringVar(&nvmePath, "nvme-path", nvmePath, "Full path of nvme executable")
+
+	cmd.PersistentFlags().StringVar(&stageRecordDir, "stage-record-dir", stageRecordDir,
+		"Directory where the node keeps its volume stage records, on a host path that survives restarts "+
+			"(default: \"stage\" in the directory of the CSI socket)")
 
 	cmd.MarkFlagRequired("endpoint")
 	cmd.MarkFlagRequired("client-info")

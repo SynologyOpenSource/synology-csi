@@ -21,11 +21,20 @@ type recordingExecutor struct {
 	fail string
 	// sessionOutput is what `iscsiadm -m session` reports.
 	sessionOutput string
+	// failStatus, if set, makes the failing command exit with this status, as
+	// iscsiadm does for "nothing found" (21); failOutput is what it prints.
+	failStatus int
+	failOutput string
+	// onCommand, if set, is called with each command as it is started.
+	onCommand func(line string)
 }
 
 func (e *recordingExecutor) Command(cmd string, args ...string) utilexec.Cmd {
 	line := strings.TrimSpace(cmd + " " + strings.Join(args, " "))
 	e.ran = append(e.ran, line)
+	if e.onCommand != nil {
+		e.onCommand(line)
+	}
 
 	out := ""
 	if cmd == "iscsiadm" && len(args) >= 2 && args[0] == "-m" && args[1] == "session" {
@@ -36,6 +45,9 @@ func (e *recordingExecutor) Command(cmd string, args ...string) utilexec.Cmd {
 		CombinedOutputScript: []testingexec.FakeAction{
 			func() ([]byte, []byte, error) {
 				if e.fail != "" && strings.Contains(line, e.fail) {
+					if e.failStatus != 0 {
+						return []byte(e.failOutput), nil, testingexec.FakeExitError{Status: e.failStatus}
+					}
 					return []byte("boom"), nil, fmt.Errorf("command failed")
 				}
 				return []byte(out), nil, nil
@@ -75,7 +87,7 @@ func newTestInitiator(e *recordingExecutor) *initiatorDriver {
 // keeps trying to log in to a target DSM has already deleted.
 func TestLogoutRemovesTheNodeRecord(t *testing.T) {
 	e := &recordingExecutor{sessionOutput: sessionLine(testIqn)}
-	if err := newTestInitiator(e).logout(testIqn, "1.2.3.4"); err != nil {
+	if err := newTestInitiator(e).logout(testIqn); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -97,7 +109,7 @@ func TestLogoutRemovesTheNodeRecord(t *testing.T) {
 // exactly when it matters.
 func TestNodeRecordIsRemovedEvenWithNoSession(t *testing.T) {
 	e := &recordingExecutor{sessionOutput: ""} // no sessions at all
-	if err := newTestInitiator(e).logout(testIqn, "1.2.3.4"); err != nil {
+	if err := newTestInitiator(e).logout(testIqn); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -109,11 +121,71 @@ func TestNodeRecordIsRemovedEvenWithNoSession(t *testing.T) {
 	}
 }
 
-// Detaching succeeded; a leftover record is noise, not a failure to report.
-func TestLogoutSucceedsWhenTheRecordCannotBeRemoved(t *testing.T) {
+// A node record left behind has iscsid retrying a login for good, and nothing
+// would ever tell the caller, so it is a failure of the logout.
+func TestLogoutFailsWhenTheRecordCannotBeRemoved(t *testing.T) {
 	e := &recordingExecutor{sessionOutput: sessionLine(testIqn), fail: "-o delete"}
-	if err := newTestInitiator(e).logout(testIqn, "1.2.3.4"); err != nil {
-		t.Errorf("a record that could not be removed should not fail the unstage, got %v", err)
+	if err := newTestInitiator(e).logout(testIqn); err == nil {
+		t.Error("a node record that could not be removed must fail the logout, or the unstage reports done with it still there")
+	}
+}
+
+// No records is the state the logout was after, as when the login never got as
+// far as creating one.
+func TestLogoutToleratesThereBeingNoNodeRecord(t *testing.T) {
+	for name, e := range map[string]*recordingExecutor{
+		"exit status 21": {sessionOutput: sessionLine(testIqn), fail: "-o delete", failStatus: 21},
+		"message alone":  {sessionOutput: sessionLine(testIqn), fail: "-o delete", failStatus: 1, failOutput: "iscsiadm: No records found"},
+	} {
+		if err := newTestInitiator(e).logout(testIqn); err != nil {
+			t.Errorf("%s: no records found should not fail the logout, got %v", name, err)
+		}
+	}
+}
+
+func TestLogoutFailsWhenTheSessionCannotBeEnded(t *testing.T) {
+	e := &recordingExecutor{sessionOutput: sessionLine(testIqn), fail: "--logout"}
+	if err := newTestInitiator(e).logout(testIqn); err == nil {
+		t.Fatal("expected the failed logout to be reported")
+	}
+	if e.find("-o delete") >= 0 {
+		t.Errorf("the record must outlive a logout that failed, ran: %v", e.ran)
+	}
+}
+
+// Not being able to list the sessions is not the same as there being none:
+// going on as if there were would skip the logout of a session that is there.
+func TestLogoutFailsWhenTheSessionsCannotBeListed(t *testing.T) {
+	e := &recordingExecutor{fail: "-m session"}
+	if err := newTestInitiator(e).logout(testIqn); err == nil {
+		t.Fatal("expected the failure to list sessions to be reported")
+	}
+	if e.find("--logout") >= 0 || e.find("-o delete") >= 0 {
+		t.Errorf("nothing may be torn down on a guess about the sessions, ran: %v", e.ran)
+	}
+}
+
+func TestNoActiveSessionsIsNotAnError(t *testing.T) {
+	e := &recordingExecutor{fail: "-m session", failStatus: 21, failOutput: "iscsiadm: No active sessions."}
+	tools := NewTools(e)
+	sessions, err := tools.iscsiadm_session()
+	if err != nil || len(sessions) != 0 {
+		t.Errorf("got %v, %v; want no sessions and no error", sessions, err)
+	}
+}
+
+// With no target name iscsiadm acts on every target on the node.
+func TestIscsiadmIsNeverAskedToActOnNoTarget(t *testing.T) {
+	e := &recordingExecutor{}
+	tools := NewTools(e)
+	if err := tools.iscsiadm_delete_node(""); err == nil {
+		t.Error("expected the delete of an empty target to be refused")
+	}
+	if err := tools.iscsiadm_logout(""); err == nil {
+		t.Error("expected the logout of an empty target to be refused")
+	}
+	if len(e.ran) != 0 {
+		t.Errorf("expected iscsiadm not to be run, ran: %v", e.ran)
 	}
 }
 
