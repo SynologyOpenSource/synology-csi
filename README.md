@@ -371,8 +371,31 @@ If you want to use images you built locally for installation, edit all files und
 - To build the CSI driver, execute `make`.
 - To build the *synocli* dev tool, execute `make synocli`. The output binary will be at `bin/synocli`.
 - To run unit tests, execute `make test`.
-- To build the UBI image used for Red Hat/OpenShift certification, run `make docker-build` (or `./scripts/deploy.sh build`). This path uses the existing `Dockerfile` and requires access to the RHEL repositories used for its runtime packages.
-- To build an entitlement-free image for community and local use, run `make docker-build-community`. This path uses `Dockerfile.community` and tags the image `synology/synology-csi:v1.4.0-community`. It builds the same driver with public Ubuntu runtime packages and is not the Red Hat-certified image.
+- To build the UBI image used for Red Hat/OpenShift certification, run `make docker-build` on a builder with access to the required RHEL package repositories.
+
+#### Community image
+
+A Docker or BuildKit builder can build the community image using public Ubuntu
+packages. The Dockerfile pins its Go and Ubuntu base images by digest and
+installs runtime packages from Ubuntu's public repositories.
+
+```sh
+make docker-build-community
+docker run --rm --network none synology-csi:v1.4.0-community --help
+```
+
+The Make target loads the image into the local Docker engine. Set
+`COMMUNITY_IMAGE_TAG` to override the local tag. The image contains the NFS and
+SMB mount helpers, ext4 and XFS tools, and NVMe utilities. With the bundled node
+DaemonSet's host chroot enabled, the worker still provides `iscsiadm` and any
+required multipath tools. The image defaults to UID 1000 and the node DaemonSet
+runs its CSI plugin as privileged UID 0.
+
+For a rootless build on Ubuntu, install the host's `uidmap` package with
+administrator approval and verify that your account has subordinate UID and
+GID ranges in `/etc/subuid` and `/etc/subgid`. These mappings let the builder
+unpack base image files with their original ownership.
+[Docker rootless prerequisites](https://docs.docker.com/engine/security/rootless/#prerequisites)
 
 ### Installation
 

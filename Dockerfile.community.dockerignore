@@ -1,0 +1,9 @@
+**
+!Dockerfile.community
+!LICENSE
+!Makefile
+!go.mod
+!go.sum
+!main.go
+!pkg/
+!pkg/**

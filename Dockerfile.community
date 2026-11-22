@@ -1,27 +1,23 @@
 # Copyright 2026 Synology Inc.
 
 ############## Build stage ##############
-FROM golang:1.21.4-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.11-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS builder
 LABEL stage=synobuilder-community
 
-RUN apk add --no-cache alpine-sdk
-WORKDIR /go/src/synok8scsiplugin
+RUN apk add --no-cache make
+WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY Makefile .
-
-ARG TARGETPLATFORM
-
-COPY main.go .
+COPY Makefile main.go ./
 COPY pkg ./pkg
-COPY synocli ./synocli
-RUN env GOARCH=$(echo "$TARGETPLATFORM" | cut -f2 -d/) \
-        GOARM=$(echo "$TARGETPLATFORM" | cut -f3 -d/ | cut -c2-) \
-        make
+ARG TARGETARCH
+ARG TARGETVARIANT
+RUN if [ "$TARGETARCH" = arm ]; then export GOARM="${TARGETVARIANT#v}"; fi \
+    && GOARCH="$TARGETARCH" make bin/synology-csi-driver
 
 ############## Final stage ##############
-FROM ubuntu:24.04
+FROM ubuntu:24.04@sha256:9c7f200c07e3d4a03e7249d2c16bf66a51120fb876aa2242cf31451412543289
 
 ARG IMAGE_VERSION=dev
 ARG IMAGE_RELEASE=1
@@ -47,6 +43,7 @@ RUN apt-get update \
         coreutils \
         e2fsprogs \
         iproute2 \
+        mount \
         nfs-common \
         nvme-cli \
         util-linux \
@@ -55,11 +52,11 @@ RUN apt-get update \
 
 WORKDIR /
 
-# Copy and run CSI driver
-COPY --from=builder /go/src/synok8scsiplugin/bin/synology-csi-driver synology-csi-driver
+COPY LICENSE /licenses/LICENSE
+COPY --from=builder /src/bin/synology-csi-driver /synology-csi-driver
 
-# Keep controller pods compatible with RunAsNonRoot certification. The node
-# DaemonSet overrides this with runAsUser: 0 because host operations need root.
+# Run the controller as a non-root user by default. The node DaemonSet uses
+# runAsUser: 0 so it can mount volumes and execute host tools.
 USER 1000
 
 ENTRYPOINT ["/synology-csi-driver"]

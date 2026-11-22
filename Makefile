@@ -4,6 +4,7 @@ REGISTRY_NAME=synology
 IMAGE_NAME=synology-csi
 IMAGE_VERSION=v1.4.0
 IMAGE_TAG=$(REGISTRY_NAME)/$(IMAGE_NAME):$(IMAGE_VERSION)
+COMMUNITY_IMAGE_TAG ?= $(IMAGE_NAME):$(IMAGE_VERSION)-community
 
 # For now, only build linux/amd64 platform
 ifeq ($(GOARCH),)
@@ -36,7 +37,7 @@ docker-build:
 
 .PHONY: docker-build-community
 docker-build-community:
-	docker build -f Dockerfile.community -t $(REGISTRY_NAME)/$(IMAGE_NAME):$(IMAGE_VERSION)-community .
+	docker build -f Dockerfile.community --build-arg IMAGE_VERSION=$(IMAGE_VERSION) -t $(COMMUNITY_IMAGE_TAG) .
 
 .PHONY: docker-build-multiarch
 docker-build-multiarch:

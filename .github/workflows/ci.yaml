@@ -6,7 +6,8 @@ on:
       - 'go.*'
       - '**/*.go'
       - 'Dockerfile'
-      - 'Dockerfile.community'
+      - 'Dockerfile.community*'
+      - 'LICENSE'
       - 'Makefile'
       - 'deploy/helm/**'
       - 'README.md'
@@ -16,7 +17,8 @@ on:
       - 'go.*'
       - '**/*.go'
       - 'Dockerfile'
-      - 'Dockerfile.community'
+      - 'Dockerfile.community*'
+      - 'LICENSE'
       - 'Makefile'
       - 'deploy/helm/**'
       - 'README.md'
@@ -59,13 +61,32 @@ jobs:
 
   community-image:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    env:
+      COMMUNITY_IMAGE_TAG: synology-csi:community-ci
 
     permissions:
       contents: read
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.1
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
 
       - name: Build community image
         run: make docker-build-community
+
+      - name: Check community image
+        run: |
+          docker run --rm --network none "$COMMUNITY_IMAGE_TAG" --help \
+            | grep -F -- '--nfs-client-address-source'
+          docker run --rm --network none --entrypoint /bin/sh "$COMMUNITY_IMAGE_TAG" -ec '
+            test "$(id -u)" = 1000
+            test -x /usr/sbin/chroot
+            test -r /licenses/LICENSE
+            for tool in bash blkid blockdev findmnt fsck ip lsblk mkfs.ext4 mkfs.xfs mount mount.cifs mount.nfs mount.nfs4 nvme resize2fs umount xfs_growfs; do
+              command -v "$tool"
+            done
+          '
