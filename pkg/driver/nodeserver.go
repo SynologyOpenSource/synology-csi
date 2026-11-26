@@ -1029,20 +1029,33 @@ func (ns *nodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetC
 	}, nil
 }
 
+// statfs f_type magic numbers of the network filesystems SMB and NFS shares are
+// mounted with. They are spelled out because x/sys/unix only defines them on
+// Linux.
+const (
+	nfsSuperMagic  = 0x6969
+	cifsSuperMagic = 0xFF534D42
+	smb2SuperMagic = 0xFE534D42
+)
+
+// statfsFunc is unix.Statfs; tests replace it.
+var statfsFunc = unix.Statfs
+
+// isNetworkFilesystem reports whether a statfs f_type is one of the network
+// filesystems used for SMB and NFS shares. f_type is a signed type on some
+// platforms, so callers pass it through uint32 first.
+func isNetworkFilesystem(fsType uint32) bool {
+	switch fsType {
+	case nfsSuperMagic, cifsSuperMagic, smb2SuperMagic:
+		return true
+	}
+	return false
+}
+
 func (ns *nodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
 	volumeId, volumePath := req.GetVolumeId(), req.GetVolumePath()
 	if volumeId == "" || volumePath == "" {
 		return nil, status.Error(codes.InvalidArgument, "Invalid Argument")
-	}
-
-	k8sVolume, err := ns.dsmService.GetVolume(volumeId)
-	if err != nil {
-		return nil, status.Errorf(codes.Unavailable,
-			"Couldn't determine whether volume[%s] exists: %v", volumeId, err)
-	}
-	if k8sVolume == nil {
-		return nil, status.Error(codes.NotFound,
-			fmt.Sprintf("Volume[%s] is not found", volumeId))
 	}
 
 	notMount, err := mount.IsNotMountPoint(ns.Mounter.Interface, volumePath)
@@ -1051,7 +1064,28 @@ func (ns *nodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 			fmt.Sprintf("Volume[%s] does not exist on the %s", volumeId, volumePath))
 	}
 
-	if k8sVolume.Protocol == utils.ProtocolSmb || k8sVolume.Protocol == utils.ProtocolNfs {
+	statfs := &unix.Statfs_t{}
+	err = statfsFunc(volumePath, statfs)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get fs info on path %s: %v", req.VolumePath, err)
+	}
+
+	// statfs on a share reports the whole DSM volume behind it, so a share's
+	// size has to come from DSM. Anything else is a filesystem on an iSCSI LUN
+	// or NVMe namespace, which statfs measures exactly. Those are not looked up
+	// in DSM: GetVolume lists every target and fetches every mapped LUN, and
+	// kubelet asks for stats of every mounted volume about once a minute.
+	if isNetworkFilesystem(uint32(statfs.Type)) {
+		k8sVolume, err := ns.dsmService.GetVolume(volumeId)
+		if err != nil {
+			return nil, status.Errorf(codes.Unavailable,
+				"Couldn't determine whether volume[%s] exists: %v", volumeId, err)
+		}
+		if k8sVolume == nil {
+			return nil, status.Error(codes.NotFound,
+				fmt.Sprintf("Volume[%s] is not found", volumeId))
+		}
+
 		return &csi.NodeGetVolumeStatsResponse{
 			Usage: []*csi.VolumeUsage{
 				&csi.VolumeUsage{
@@ -1060,13 +1094,6 @@ func (ns *nodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 				},
 			},
 		}, nil
-	}
-
-	// If we are dealing with a LUN use statfs
-	statfs := &unix.Statfs_t{}
-	err = unix.Statfs(volumePath, statfs)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to get fs info on path %s: %v", req.VolumePath, err)
 	}
 
 	// Available is blocks available * fragment size
